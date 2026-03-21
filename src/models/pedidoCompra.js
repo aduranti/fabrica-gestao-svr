@@ -14,6 +14,7 @@ module.exports = (sequelize) => {
     data_previsao: { type: DataTypes.DATEONLY },
     data_recebimento: { type: DataTypes.DATEONLY },
     valor_total: { type: DataTypes.DECIMAL(12, 2), defaultValue: 0 },
+    valor_frete: { type: DataTypes.DECIMAL(12, 2), defaultValue: 0 },
     observacoes: { type: DataTypes.TEXT },
   }, { tableName: 'pedidos_compra' });
 };

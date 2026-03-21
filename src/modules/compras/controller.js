@@ -17,6 +17,7 @@ const schemaPedido = Joi.object({
   fornecedor_id: Joi.number().integer().required(),
   data_pedido: Joi.date().required(),
   data_previsao: Joi.date().allow(null),
+  valor_frete: Joi.number().min(0).default(0),
   observacoes: Joi.string().allow('', null),
   itens: Joi.array().items(schemaItem).min(1).required(),
 });
@@ -59,7 +60,8 @@ exports.criar = async (req, res, next) => {
         data_pedido: value.data_pedido,
         data_previsao: value.data_previsao,
         observacoes: value.observacoes,
-        valor_total: valorTotal,
+        valor_frete: value.valor_frete || 0,
+        valor_total: valorTotal + (value.valor_frete || 0),
       }, { transaction: t });
 
       for (const item of itensData) {
@@ -116,7 +118,8 @@ exports.atualizar = async (req, res, next) => {
         data_pedido: value.data_pedido,
         data_previsao: value.data_previsao,
         observacoes: value.observacoes,
-        valor_total: valorTotal,
+        valor_frete: value.valor_frete || 0,
+        valor_total: valorTotal + (value.valor_frete || 0),
       }, { transaction: t });
     });
 
@@ -166,20 +169,34 @@ exports.receberPedido = async (req, res, next) => {
     }
 
     await sequelize.transaction(async (t) => {
+      const valorFrete = parseFloat(pedido.valor_frete) || 0;
+      // Total dos subtotais dos itens que estão sendo recebidos (para distribuir frete proporcionalmente)
+      const totalSubtotalRecebidos = value.itens.reduce((acc, recebimento) => {
+        const item = pedido.itens.find(i => i.id === recebimento.item_id);
+        return acc + (item ? parseFloat(item.subtotal) : 0);
+      }, 0);
+
       for (const recebimento of value.itens) {
         const item = pedido.itens.find(i => i.id === recebimento.item_id);
         if (!item) continue;
 
         const preco = recebimento.preco_unitario || item.preco_unitario;
+
+        // Distribui o frete proporcionalmente ao subtotal do item
+        const freteItem = totalSubtotalRecebidos > 0
+          ? valorFrete * (parseFloat(item.subtotal) / totalSubtotalRecebidos)
+          : 0;
+        const precoComFrete = parseFloat(preco) + (freteItem / recebimento.quantidade_recebida);
+
         await item.update({ quantidade_recebida: recebimento.quantidade_recebida, preco_unitario: preco }, { transaction: t });
 
-        // Atualiza estoque com custo médio ponderado
+        // Atualiza estoque com custo médio ponderado (incluindo frete)
         const materia = await MateriaPrima.findByPk(item.materia_prima_id, { transaction: t });
         const novoCustoMedio = calcularCustoMedio(
           parseFloat(materia.estoque_atual),
           parseFloat(materia.custo_medio),
           recebimento.quantidade_recebida,
-          preco
+          precoComFrete
         );
         const novoSaldo = parseFloat(materia.estoque_atual) + recebimento.quantidade_recebida;
 
@@ -189,7 +206,7 @@ exports.receberPedido = async (req, res, next) => {
           materia_prima_id: materia.id,
           tipo: 'entrada',
           quantidade: recebimento.quantidade_recebida,
-          custo_unitario: preco,
+          custo_unitario: precoComFrete,
           saldo_anterior: parseFloat(materia.estoque_atual),
           saldo_posterior: novoSaldo,
           origem_tipo: 'compra',
