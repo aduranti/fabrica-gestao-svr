@@ -7,6 +7,7 @@ const schema = Joi.object({
   cnpj_cpf: Joi.string().max(20).allow('', null),
   telefone: Joi.string().max(20).allow('', null),
   email: Joi.string().email().allow('', null),
+  site: Joi.string().uri().max(200).allow('', null),
   endereco: Joi.string().max(200).allow('', null),
   cidade: Joi.string().max(100).allow('', null),
   estado: Joi.string().max(2).allow('', null),

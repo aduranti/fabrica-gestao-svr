@@ -8,6 +8,7 @@ module.exports = (sequelize) => {
     cnpj_cpf: { type: DataTypes.STRING(20), unique: true },
     telefone: { type: DataTypes.STRING(20) },
     email: { type: DataTypes.STRING(150) },
+    site: { type: DataTypes.STRING(200) },
     endereco: { type: DataTypes.STRING(200) },
     cidade: { type: DataTypes.STRING(100) },
     estado: { type: DataTypes.STRING(2) },
