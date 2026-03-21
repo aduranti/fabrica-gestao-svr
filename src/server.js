@@ -3,10 +3,12 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
+const swaggerUi = require('swagger-ui-express');
 
 const { port, env, cors: corsConfig } = require('./config/app');
 const { sequelize } = require('./models');
 const errorHandler = require('./middlewares/errorHandler');
+const swaggerSpec = require('./config/swagger');
 
 // Rotas
 const authRoutes = require('./modules/auth/routes');
@@ -21,7 +23,7 @@ const produtosRoutes = require('./modules/produtos/routes');
 const app = express();
 
 // Middlewares globais
-app.use(helmet());
+app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: corsConfig.origin }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -34,6 +36,13 @@ if (env !== 'test') {
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', ambiente: env, timestamp: new Date().toISOString() });
 });
+
+// Swagger UI
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
+  customSiteTitle: 'Fábrica Gestão API',
+  swaggerOptions: { persistAuthorization: true },
+}));
+app.get('/docs.json', (req, res) => res.json(swaggerSpec));
 
 // API Routes
 const API = '/api/v1';
@@ -63,7 +72,8 @@ async function iniciar() {
     app.listen(port, () => {
       console.log(`🚀 Servidor rodando na porta ${port} [${env}]`);
       console.log(`📋 Health: http://localhost:${port}/health`);
-      console.log(`🔗 API: http://localhost:${port}${API}`);
+      console.log(`🔗 API:    http://localhost:${port}${API}`);
+      console.log(`📖 Docs:   http://localhost:${port}/docs`);
     });
   } catch (err) {
     console.error('❌ Falha ao conectar banco de dados:', err.message);
