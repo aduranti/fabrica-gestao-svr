@@ -8,6 +8,8 @@ module.exports = (sequelize) => {
     quantidade_pedida: { type: DataTypes.DECIMAL(12, 3), allowNull: false },
     quantidade_recebida: { type: DataTypes.DECIMAL(12, 3), defaultValue: 0 },
     preco_unitario: { type: DataTypes.DECIMAL(10, 4), allowNull: false },
+    fator_conversao: { type: DataTypes.DECIMAL(10, 4), defaultValue: 1 },
+    unidade_compra: { type: DataTypes.STRING(30) },
     subtotal: { type: DataTypes.DECIMAL(12, 2), allowNull: false },
   }, { tableName: 'pedidos_compra_itens' });
 };

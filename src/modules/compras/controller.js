@@ -11,6 +11,8 @@ const schemaItem = Joi.object({
   materia_prima_id: Joi.number().integer().required(),
   quantidade_pedida: Joi.number().positive().required(),
   preco_unitario: Joi.number().positive().required(),
+  fator_conversao: Joi.number().positive().default(1),
+  unidade_compra: Joi.string().max(30).allow('', null),
 });
 
 const schemaPedido = Joi.object({
@@ -181,31 +183,36 @@ exports.receberPedido = async (req, res, next) => {
         if (!item) continue;
 
         const preco = recebimento.preco_unitario || item.preco_unitario;
+        const fatorConversao = parseFloat(item.fator_conversao) || 1;
+
+        // Quantidade em unidade de estoque (ex: 2 frascos × 100ml = 200ml)
+        const qtdEstoque = recebimento.quantidade_recebida * fatorConversao;
 
         // Distribui o frete proporcionalmente ao subtotal do item
         const freteItem = totalSubtotalRecebidos > 0
           ? valorFrete * (parseFloat(item.subtotal) / totalSubtotalRecebidos)
           : 0;
-        const precoComFrete = parseFloat(preco) + (freteItem / recebimento.quantidade_recebida);
+        // Custo por unidade de estoque = (preco_compra + frete_proporcional) / fator_conversao
+        const precoComFrete = (parseFloat(preco) + (freteItem / recebimento.quantidade_recebida)) / fatorConversao;
 
         await item.update({ quantidade_recebida: recebimento.quantidade_recebida, preco_unitario: preco }, { transaction: t });
 
-        // Atualiza estoque com custo médio ponderado (incluindo frete)
+        // Atualiza estoque com custo médio ponderado (incluindo frete, em unidade de estoque)
         const materia = await MateriaPrima.findByPk(item.materia_prima_id, { transaction: t });
         const novoCustoMedio = calcularCustoMedio(
           parseFloat(materia.estoque_atual),
           parseFloat(materia.custo_medio),
-          recebimento.quantidade_recebida,
+          qtdEstoque,
           precoComFrete
         );
-        const novoSaldo = parseFloat(materia.estoque_atual) + recebimento.quantidade_recebida;
+        const novoSaldo = parseFloat(materia.estoque_atual) + qtdEstoque;
 
         await materia.update({ estoque_atual: novoSaldo, custo_medio: novoCustoMedio }, { transaction: t });
 
         await MovimentacaoEstoque.create({
           materia_prima_id: materia.id,
           tipo: 'entrada',
-          quantidade: recebimento.quantidade_recebida,
+          quantidade: qtdEstoque,
           custo_unitario: precoComFrete,
           saldo_anterior: parseFloat(materia.estoque_atual),
           saldo_posterior: novoSaldo,
@@ -213,6 +220,9 @@ exports.receberPedido = async (req, res, next) => {
           origem_id: pedido.id,
           usuario_id: req.usuario.id,
           data_movimentacao: new Date(),
+          observacoes: fatorConversao !== 1
+            ? `${recebimento.quantidade_recebida} ${item.unidade_compra || 'un'} × ${fatorConversao} = ${qtdEstoque} em estoque`
+            : null,
         }, { transaction: t });
       }
 
