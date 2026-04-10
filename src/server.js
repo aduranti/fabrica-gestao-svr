@@ -19,6 +19,7 @@ const comprasRoutes = require('./modules/compras/routes');
 const formulasRoutes = require('./modules/formulas/routes');
 const producaoRoutes = require('./modules/producao/routes');
 const produtosRoutes = require('./modules/produtos/routes');
+const relatoriosRoutes = require('./modules/relatorios/routes');
 
 const app = express();
 
@@ -54,6 +55,7 @@ app.use(`${API}/compras`, comprasRoutes);
 app.use(`${API}/formulas`, formulasRoutes);
 app.use(`${API}/producao`, producaoRoutes);
 app.use(`${API}/produtos`, produtosRoutes);
+app.use(`${API}/relatorios`, relatoriosRoutes);
 
 // 404
 app.use((req, res) => {

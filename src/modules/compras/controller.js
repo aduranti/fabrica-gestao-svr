@@ -19,6 +19,7 @@ const schemaPedido = Joi.object({
   fornecedor_id: Joi.number().integer().required(),
   data_pedido: Joi.date().required(),
   data_previsao: Joi.date().allow(null),
+  data_recebimento: Joi.date().allow(null),
   valor_frete: Joi.number().min(0).default(0),
   observacoes: Joi.string().allow('', null),
   itens: Joi.array().items(schemaItem).min(1).required(),
@@ -98,8 +99,8 @@ exports.atualizar = async (req, res, next) => {
     const pedido = await PedidoCompra.findByPk(req.params.id);
     if (!pedido) return res.status(404).json({ error: 'Pedido não encontrado.' });
 
-    if (!['rascunho'].includes(pedido.status)) {
-      return res.status(400).json({ error: 'Apenas pedidos em rascunho podem ser editados.' });
+    if (!['rascunho', 'enviado'].includes(pedido.status)) {
+      return res.status(400).json({ error: 'Apenas pedidos em rascunho ou enviado podem ser editados.' });
     }
 
     const { error, value } = schemaPedido.validate(req.body);
@@ -126,6 +127,117 @@ exports.atualizar = async (req, res, next) => {
     });
 
     res.json(await PedidoCompra.findByPk(pedido.id, { include: [{ model: PedidoCompraItem, as: 'itens' }] }));
+  } catch (err) { next(err); }
+};
+
+exports.atualizarInfo = async (req, res, next) => {
+  try {
+    const schemaInfo = Joi.object({
+      fornecedor_id: Joi.number().integer().required(),
+      data_pedido: Joi.date().required(),
+      data_previsao: Joi.date().allow(null),
+      data_recebimento: Joi.date().allow(null),
+      valor_frete: Joi.number().min(0).default(0),
+      observacoes: Joi.string().allow('', null),
+    });
+
+    const { error, value } = schemaInfo.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    const pedido = await PedidoCompra.findByPk(req.params.id);
+    if (!pedido) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    if (pedido.status === 'cancelado') {
+      return res.status(400).json({ error: 'Pedido cancelado não pode ser alterado.' });
+    }
+
+    await pedido.update(value);
+    res.json(pedido);
+  } catch (err) { next(err); }
+};
+
+exports.corrigirItens = async (req, res, next) => {
+  try {
+    const { error, value } = Joi.object({
+      itens: Joi.array().items(schemaItem).min(1).required(),
+    }).validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    const pedido = await PedidoCompra.findByPk(req.params.id, {
+      include: [{ model: PedidoCompraItem, as: 'itens' }],
+    });
+    if (!pedido) return res.status(404).json({ error: 'Pedido não encontrado.' });
+    if (pedido.status === 'cancelado') {
+      return res.status(400).json({ error: 'Pedido cancelado não pode ser alterado.' });
+    }
+
+    await sequelize.transaction(async (t) => {
+      const temRecebimento = ['parcial', 'recebido'].includes(pedido.status);
+
+      // Estorna estoque de todos os itens já recebidos
+      if (temRecebimento) {
+        for (const item of pedido.itens) {
+          const qtdRecebida = parseFloat(item.quantidade_recebida) || 0;
+          if (qtdRecebida <= 0) continue;
+
+          const fatorConversao = parseFloat(item.fator_conversao) || 1;
+          const qtdEstornar = qtdRecebida * fatorConversao;
+
+          const materia = await MateriaPrima.findByPk(item.materia_prima_id, { transaction: t });
+          const saldoAnterior = parseFloat(materia.estoque_atual);
+          const novoSaldo = saldoAnterior - qtdEstornar;
+
+          // Recalcula custo médio revertendo a entrada
+          let novoCustoMedio = parseFloat(materia.custo_medio);
+          if (novoSaldo > 0) {
+            const custoOriginal = parseFloat(item.preco_unitario) / fatorConversao;
+            novoCustoMedio = Math.max(0,
+              (parseFloat(materia.custo_medio) * saldoAnterior - custoOriginal * qtdEstornar) / novoSaldo
+            );
+          }
+
+          await materia.update({
+            estoque_atual: Math.max(0, novoSaldo),
+            custo_medio: novoCustoMedio,
+          }, { transaction: t });
+
+          await MovimentacaoEstoque.create({
+            materia_prima_id: materia.id,
+            tipo: 'saida',
+            quantidade: qtdEstornar,
+            custo_unitario: parseFloat(item.preco_unitario) / fatorConversao,
+            saldo_anterior: saldoAnterior,
+            saldo_posterior: Math.max(0, novoSaldo),
+            origem_tipo: 'ajuste',
+            origem_id: pedido.id,
+            usuario_id: req.usuario.id,
+            data_movimentacao: new Date(),
+            observacoes: `Estorno - correção do pedido ${pedido.numero}`,
+          }, { transaction: t });
+        }
+      }
+
+      // Remove itens antigos e cria novos
+      await PedidoCompraItem.destroy({ where: { pedido_id: pedido.id }, transaction: t });
+
+      let valorTotal = 0;
+      for (const item of value.itens) {
+        const subtotal = item.quantidade_pedida * item.preco_unitario;
+        valorTotal += subtotal;
+        await PedidoCompraItem.create({
+          pedido_id: pedido.id, ...item, subtotal,
+        }, { transaction: t });
+      }
+
+      // Se havia recebimento, volta para 'enviado' aguardando novo recebimento
+      await pedido.update({
+        valor_total: valorTotal + parseFloat(pedido.valor_frete || 0),
+        ...(temRecebimento ? { status: 'enviado', data_recebimento: null } : {}),
+      }, { transaction: t });
+    });
+
+    res.json(await PedidoCompra.findByPk(pedido.id, {
+      include: [{ model: PedidoCompraItem, as: 'itens' }],
+    }));
   } catch (err) { next(err); }
 };
 

@@ -97,6 +97,8 @@ router.post('/', auth, controller.criar);
  */
 router.get('/:id', auth, controller.buscar);
 router.put('/:id', auth, controller.atualizar);
+router.patch('/:id/info', auth, controller.atualizarInfo);
+router.put('/:id/corrigir-itens', auth, controller.corrigirItens);
 
 /**
  * @swagger
