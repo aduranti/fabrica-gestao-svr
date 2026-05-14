@@ -155,6 +155,8 @@ router.patch('/:id/concluir', auth, controller.concluir);
  *       200:
  *         description: Ordem cancelada
  */
+router.patch('/:id/produto', auth, controller.vincularProduto);
+router.patch('/:id/corrigir-produto', auth, controller.corrigirProdutoConcluida);
 router.patch('/:id/cancelar', auth, controller.cancelar);
 
 module.exports = router;

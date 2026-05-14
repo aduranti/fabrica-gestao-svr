@@ -3,10 +3,11 @@ const {
   OrdemProducao, OrdemProducaoInsumo, Formula, FormulaIngrediente,
   MateriaPrima, Produto, LoteProduto, MovimentacaoEstoque, sequelize,
 } = require('../../models');
-const { gerarNumero } = require('../../utils/numerador');
+const { gerarNumero, gerarNumeroLote } = require('../../utils/numerador');
 
 const schemaOrdem = Joi.object({
   formula_id: Joi.number().integer().required(),
+  produto_id: Joi.number().integer().required(),
   quantidade_planejada: Joi.number().positive().required(),
   data_planejada: Joi.date().required(),
   lote: Joi.string().max(50).allow('', null),
@@ -70,6 +71,7 @@ exports.criar = async (req, res, next) => {
       const novaOrdem = await OrdemProducao.create({
         numero,
         formula_id: value.formula_id,
+        produto_id: value.produto_id,
         usuario_responsavel_id: req.usuario.id,
         quantidade_planejada: value.quantidade_planejada,
         data_planejada: value.data_planejada,
@@ -118,6 +120,7 @@ exports.concluir = async (req, res, next) => {
   try {
     const schemaConclusao = Joi.object({
       quantidade_produzida: Joi.number().positive().required(),
+      turno: Joi.string().valid('A', 'B', 'C').default('A'),
       insumos_reais: Joi.array().items(Joi.object({
         insumo_id: Joi.number().integer().required(),
         quantidade_real_usada: Joi.number().positive().required(),
@@ -167,21 +170,23 @@ exports.concluir = async (req, res, next) => {
 
       const custoUnitario = value.quantidade_produzida > 0 ? custoTotal / value.quantidade_produzida : 0;
 
-      // Atualiza/cria produto
-      const produto = await Produto.findOne({ where: { formula_id: ordem.formula_id } });
+      // Atualiza estoque do produto acabado
+      const produto = await Produto.findByPk(ordem.produto_id);
       if (produto) {
         await produto.update({
           estoque_atual: parseFloat(produto.estoque_atual) + value.quantidade_produzida,
           preco_custo: custoUnitario,
         }, { transaction: t });
 
-        // Cria lote
+        // Cria lote com número automático
+        const dataFabricacao = new Date();
+        const numeroLote = await gerarNumeroLote(LoteProduto, value.turno || 'A', dataFabricacao);
         await LoteProduto.create({
           produto_id: produto.id,
           ordem_producao_id: ordem.id,
-          numero_lote: ordem.lote || ordem.numero,
+          numero_lote: numeroLote,
           quantidade: value.quantidade_produzida,
-          data_fabricacao: new Date(),
+          data_fabricacao: dataFabricacao,
           custo_unitario: custoUnitario,
         }, { transaction: t });
       }
@@ -195,6 +200,70 @@ exports.concluir = async (req, res, next) => {
     });
 
     res.json({ message: 'Ordem de produção concluída com sucesso.' });
+  } catch (err) { next(err); }
+};
+
+exports.vincularProduto = async (req, res, next) => {
+  try {
+    const { produto_id } = req.body;
+    if (!produto_id) return res.status(400).json({ error: 'produto_id é obrigatório.' });
+
+    const ordem = await OrdemProducao.findByPk(req.params.id);
+    if (!ordem) return res.status(404).json({ error: 'Ordem não encontrada.' });
+    if (ordem.status === 'cancelada') {
+      return res.status(400).json({ error: 'Ordem cancelada não pode ser alterada.' });
+    }
+
+    await ordem.update({ produto_id });
+    res.json({ message: 'Produto vinculado com sucesso.', produto_id });
+  } catch (err) { next(err); }
+};
+
+exports.corrigirProdutoConcluida = async (req, res, next) => {
+  try {
+    const { produto_id, turno } = req.body;
+    if (!produto_id) return res.status(400).json({ error: 'produto_id é obrigatório.' });
+
+    const ordem = await OrdemProducao.findByPk(req.params.id);
+    if (!ordem) return res.status(404).json({ error: 'Ordem não encontrada.' });
+    if (ordem.status !== 'concluida') {
+      return res.status(400).json({ error: 'Este endpoint é apenas para ordens já concluídas.' });
+    }
+    if (ordem.produto_id) {
+      return res.status(400).json({ error: 'Esta ordem já possui produto vinculado.' });
+    }
+
+    const produto = await Produto.findByPk(produto_id);
+    if (!produto) return res.status(404).json({ error: 'Produto não encontrado.' });
+
+    await sequelize.transaction(async (t) => {
+      const custoUnitario = parseFloat(ordem.quantidade_produzida) > 0
+        ? parseFloat(ordem.custo_total_calculado) / parseFloat(ordem.quantidade_produzida)
+        : 0;
+
+      // Atualiza estoque do produto
+      await produto.update({
+        estoque_atual: parseFloat(produto.estoque_atual) + parseFloat(ordem.quantidade_produzida),
+        preco_custo: custoUnitario,
+      }, { transaction: t });
+
+      // Cria lote retroativo
+      const dataFabricacao = ordem.data_conclusao ? new Date(ordem.data_conclusao) : new Date();
+      const numeroLote = await gerarNumeroLote(LoteProduto, turno || 'A', dataFabricacao);
+      await LoteProduto.create({
+        produto_id,
+        ordem_producao_id: ordem.id,
+        numero_lote: numeroLote,
+        quantidade: ordem.quantidade_produzida,
+        data_fabricacao: dataFabricacao,
+        custo_unitario: custoUnitario,
+      }, { transaction: t });
+
+      // Vincula produto à ordem
+      await ordem.update({ produto_id }, { transaction: t });
+    });
+
+    res.json({ message: 'Produto vinculado e estoque atualizado retroativamente.' });
   } catch (err) { next(err); }
 };
 
@@ -215,6 +284,7 @@ async function buscarOrdemCompleta(id) {
   return OrdemProducao.findByPk(id, {
     include: [
       { model: Formula, as: 'formula' },
+      { model: Produto, as: 'produto', attributes: ['id', 'codigo', 'nome'] },
       { model: OrdemProducaoInsumo, as: 'insumos', include: [{ model: MateriaPrima, as: 'materiaPrima' }] },
     ],
   });

@@ -5,6 +5,7 @@ module.exports = (sequelize) => {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
     numero: { type: DataTypes.STRING(20), unique: true },
     formula_id: { type: DataTypes.INTEGER, allowNull: false },
+    produto_id: { type: DataTypes.INTEGER, allowNull: true },
     usuario_responsavel_id: { type: DataTypes.INTEGER, allowNull: false },
     quantidade_planejada: { type: DataTypes.DECIMAL(10, 3), allowNull: false },
     quantidade_produzida: { type: DataTypes.DECIMAL(10, 3), defaultValue: 0 },

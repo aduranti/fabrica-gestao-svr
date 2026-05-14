@@ -83,6 +83,7 @@ FormulaIngrediente.belongsTo(UnidadeMedida, { foreignKey: 'unidade_medida_id', a
 
 // OrdemProducao
 OrdemProducao.belongsTo(Formula, { foreignKey: 'formula_id', as: 'formula' });
+OrdemProducao.belongsTo(Produto, { foreignKey: 'produto_id', as: 'produto' });
 OrdemProducao.belongsTo(Usuario, { foreignKey: 'usuario_responsavel_id', as: 'responsavel' });
 OrdemProducao.hasMany(OrdemProducaoInsumo, { foreignKey: 'ordem_id', as: 'insumos' });
 OrdemProducao.hasMany(LoteProduto, { foreignKey: 'ordem_producao_id', as: 'lotes' });

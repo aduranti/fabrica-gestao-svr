@@ -90,6 +90,104 @@ exports.movimentacoesMateriasPrimas = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+exports.produtosAcabados = async (req, res, next) => {
+  try {
+    const schema = Joi.object({
+      produto_id: Joi.number().integer().allow(null, ''),
+      status_lote: Joi.string().valid('disponivel', 'vendido', 'vencido', 'descartado').allow(null, ''),
+      data_inicio: Joi.date().allow(null, ''),
+      data_fim: Joi.date().allow(null, ''),
+    });
+
+    const { error, value } = schema.validate(req.query);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    // Condições para lotes
+    const condicoesLote = ['1=1'];
+    const replacements = {};
+
+    if (value.produto_id) {
+      condicoesLote.push('l.produto_id = :produto_id');
+      replacements.produto_id = value.produto_id;
+    }
+    if (value.status_lote) {
+      condicoesLote.push('l.status = :status_lote');
+      replacements.status_lote = value.status_lote;
+    }
+    if (value.data_inicio) {
+      condicoesLote.push('l.data_fabricacao >= :data_inicio');
+      replacements.data_inicio = value.data_inicio;
+    }
+    if (value.data_fim) {
+      condicoesLote.push('l.data_fabricacao <= :data_fim');
+      replacements.data_fim = value.data_fim;
+    }
+
+    const whereLote = condicoesLote.join(' AND ');
+
+    // Resumo por produto
+    const produtos = await sequelize.query(`
+      SELECT
+        p.id,
+        p.codigo,
+        p.nome,
+        p.estoque_atual,
+        p.estoque_minimo,
+        p.preco_custo,
+        p.preco_venda,
+        p.ativo,
+        um.sigla AS unidade,
+        f.nome   AS formula_nome,
+        COUNT(l.id)                                       AS total_lotes,
+        COALESCE(SUM(CASE WHEN l.status = 'disponivel' THEN l.quantidade ELSE 0 END), 0) AS qtd_disponivel,
+        COALESCE(SUM(CASE WHEN l.status = 'vendido'    THEN l.quantidade ELSE 0 END), 0) AS qtd_vendido,
+        COALESCE(SUM(CASE WHEN l.status = 'vencido'    THEN l.quantidade ELSE 0 END), 0) AS qtd_vencido
+      FROM produtos p
+      JOIN unidades_medida um ON um.id = p.unidade_medida_id
+      LEFT JOIN formulas f    ON f.id  = p.formula_id
+      LEFT JOIN lotes_produtos l ON l.produto_id = p.id
+      ${value.produto_id ? 'WHERE p.id = :produto_id' : ''}
+      GROUP BY p.id, p.codigo, p.nome, p.estoque_atual, p.estoque_minimo,
+               p.preco_custo, p.preco_venda, p.ativo, um.sigla, f.nome
+      ORDER BY p.nome
+    `, { replacements, type: QueryTypes.SELECT });
+
+    // Lotes com ordem de produção
+    const lotes = await sequelize.query(`
+      SELECT
+        l.id,
+        l.numero_lote,
+        l.produto_id,
+        p.nome  AS produto_nome,
+        p.codigo AS produto_codigo,
+        um.sigla AS unidade,
+        l.quantidade,
+        l.data_fabricacao,
+        l.data_validade,
+        l.custo_unitario,
+        (l.quantidade * l.custo_unitario) AS custo_total,
+        l.status,
+        op.numero AS ordem_numero
+      FROM lotes_produtos l
+      JOIN produtos p         ON p.id  = l.produto_id
+      JOIN unidades_medida um ON um.id = p.unidade_medida_id
+      LEFT JOIN ordens_producao op ON op.id = l.ordem_producao_id
+      WHERE ${whereLote}
+      ORDER BY l.data_fabricacao DESC, l.id DESC
+    `, { replacements, type: QueryTypes.SELECT });
+
+    // Totais
+    const totais = {
+      total_produtos: produtos.length,
+      produtos_abaixo_minimo: produtos.filter(p => parseFloat(p.estoque_atual) <= parseFloat(p.estoque_minimo) && p.estoque_minimo > 0).length,
+      valor_estoque: produtos.reduce((s, p) => s + parseFloat(p.estoque_atual) * parseFloat(p.preco_custo || 0), 0),
+      total_lotes: lotes.length,
+    };
+
+    res.json({ produtos, lotes, totais });
+  } catch (err) { next(err); }
+};
+
 exports.listaMateriasPrimas = async (req, res, next) => {
   try {
     const mps = await sequelize.query(
