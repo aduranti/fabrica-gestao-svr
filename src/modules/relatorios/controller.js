@@ -188,6 +188,91 @@ exports.produtosAcabados = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+exports.vendas = async (req, res, next) => {
+  try {
+    const schema = Joi.object({
+      produto_id: Joi.number().integer().allow(null, ''),
+      data_inicio: Joi.date().allow(null, ''),
+      data_fim: Joi.date().allow(null, ''),
+      status: Joi.string().valid('rascunho', 'confirmada', 'cancelada').allow(null, ''),
+      cliente: Joi.string().allow(null, ''),
+    });
+
+    const { error, value } = schema.validate(req.query);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    const condicoes = ["v.status != 'cancelada'"];
+    const replacements = {};
+
+    if (value.status) { condicoes.push('v.status = :status'); replacements.status = value.status; }
+    if (value.cliente) { condicoes.push('v.cliente LIKE :cliente'); replacements.cliente = `%${value.cliente}%`; }
+    if (value.data_inicio) { condicoes.push('v.data_venda >= :data_inicio'); replacements.data_inicio = value.data_inicio; }
+    if (value.data_fim) { condicoes.push('v.data_venda <= :data_fim'); replacements.data_fim = value.data_fim; }
+    if (value.produto_id) { condicoes.push('vi.produto_id = :produto_id'); replacements.produto_id = value.produto_id; }
+
+    const where = condicoes.join(' AND ');
+
+    const itens = await sequelize.query(`
+      SELECT
+        v.id AS venda_id,
+        v.numero,
+        v.cliente,
+        v.data_venda,
+        v.status,
+        v.desconto,
+        v.total,
+        v.observacao,
+        u.nome AS usuario,
+        vi.id AS item_id,
+        p.codigo AS produto_codigo,
+        p.nome AS produto_nome,
+        vi.quantidade,
+        vi.preco_unitario,
+        vi.subtotal
+      FROM vendas v
+      INNER JOIN venda_itens vi ON vi.venda_id = v.id
+      INNER JOIN produtos p ON p.id = vi.produto_id
+      LEFT JOIN usuarios u ON u.id = v.usuario_id
+      WHERE ${where}
+      ORDER BY v.data_venda DESC, v.id DESC, vi.id ASC
+    `, { replacements, type: QueryTypes.SELECT });
+
+    // Totalizadores
+    const totais = await sequelize.query(`
+      SELECT
+        COUNT(DISTINCT v.id) AS total_vendas,
+        SUM(vi.quantidade) AS total_itens_qty,
+        SUM(vi.subtotal) AS total_bruto,
+        SUM(v.desconto) AS total_desconto,
+        SUM(v.total) AS total_liquido
+      FROM vendas v
+      INNER JOIN venda_itens vi ON vi.venda_id = v.id
+      LEFT JOIN usuarios u ON u.id = v.usuario_id
+      WHERE ${where}
+    `, { replacements, type: QueryTypes.SELECT });
+
+    // Resumo por produto
+    const porProduto = await sequelize.query(`
+      SELECT
+        p.id AS produto_id,
+        p.codigo AS produto_codigo,
+        p.nome AS produto_nome,
+        SUM(vi.quantidade) AS total_quantidade,
+        SUM(vi.subtotal) AS total_valor,
+        COUNT(DISTINCT v.id) AS total_vendas
+      FROM vendas v
+      INNER JOIN venda_itens vi ON vi.venda_id = v.id
+      INNER JOIN produtos p ON p.id = vi.produto_id
+      LEFT JOIN usuarios u ON u.id = v.usuario_id
+      WHERE ${where}
+      GROUP BY p.id, p.codigo, p.nome
+      ORDER BY total_valor DESC
+    `, { replacements, type: QueryTypes.SELECT });
+
+    res.json({ itens, totais: totais[0], porProduto });
+  } catch (err) { next(err); }
+};
+
 exports.listaMateriasPrimas = async (req, res, next) => {
   try {
     const mps = await sequelize.query(

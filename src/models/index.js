@@ -28,6 +28,9 @@ const OrdemProducao = require('./ordemProducao')(sequelize);
 const OrdemProducaoInsumo = require('./ordemProducaoInsumo')(sequelize);
 const Produto = require('./produto')(sequelize);
 const LoteProduto = require('./loteProduto')(sequelize);
+const Venda = require('./venda')(sequelize);
+const VendaItem = require('./vendaItem')(sequelize);
+const Cliente = require('./cliente')(sequelize);
 
 // Associações
 // Usuario
@@ -101,6 +104,19 @@ Produto.hasMany(LoteProduto, { foreignKey: 'produto_id', as: 'lotes' });
 LoteProduto.belongsTo(Produto, { foreignKey: 'produto_id', as: 'produto' });
 LoteProduto.belongsTo(OrdemProducao, { foreignKey: 'ordem_producao_id', as: 'ordemProducao' });
 
+// Cliente
+Cliente.hasMany(Venda, { foreignKey: 'cliente_id' });
+
+// Venda
+Venda.belongsTo(Usuario, { foreignKey: 'usuario_id', as: 'usuario' });
+Venda.belongsTo(Cliente, { foreignKey: 'cliente_id', as: 'clienteCadastrado' });
+Venda.hasMany(VendaItem, { foreignKey: 'venda_id', as: 'itens' });
+
+// VendaItem
+VendaItem.belongsTo(Venda, { foreignKey: 'venda_id' });
+VendaItem.belongsTo(Produto, { foreignKey: 'produto_id', as: 'produto' });
+Produto.hasMany(VendaItem, { foreignKey: 'produto_id' });
+
 module.exports = {
   sequelize,
   Sequelize,
@@ -120,4 +136,7 @@ module.exports = {
   OrdemProducaoInsumo,
   Produto,
   LoteProduto,
+  Venda,
+  VendaItem,
+  Cliente,
 };

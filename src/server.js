@@ -20,6 +20,9 @@ const formulasRoutes = require('./modules/formulas/routes');
 const producaoRoutes = require('./modules/producao/routes');
 const produtosRoutes = require('./modules/produtos/routes');
 const relatoriosRoutes = require('./modules/relatorios/routes');
+const backupRoutes = require('./modules/backup/routes');
+const vendasRoutes = require('./modules/vendas/routes');
+const clientesRoutes = require('./modules/clientes/routes');
 
 const app = express();
 
@@ -56,6 +59,9 @@ app.use(`${API}/formulas`, formulasRoutes);
 app.use(`${API}/producao`, producaoRoutes);
 app.use(`${API}/produtos`, produtosRoutes);
 app.use(`${API}/relatorios`, relatoriosRoutes);
+app.use(`${API}/backup`, backupRoutes);
+app.use(`${API}/vendas`, vendasRoutes);
+app.use(`${API}/clientes`, clientesRoutes);
 
 // 404
 app.use((req, res) => {
