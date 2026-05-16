@@ -3,6 +3,7 @@ module.exports = {
     const agora = new Date();
     await queryInterface.bulkInsert('categorias_mp', [
       {
+        empresa_id: null,
         nome: 'Óleos Essenciais',
         descricao: 'Óleos essenciais aromáticos e terapêuticos',
         created_at: agora,
