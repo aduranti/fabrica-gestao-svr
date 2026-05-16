@@ -13,9 +13,14 @@ module.exports = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, jwtConfig.secret);
-    const usuario = await Usuario.findByPk(decoded.id);
 
-    if (!usuario || !usuario.ativo) {
+    const where = { id: decoded.id, ativo: true };
+    // super_admin tem empresa_id NULL no token
+    if (decoded.empresa_id != null) where.empresa_id = decoded.empresa_id;
+
+    const usuario = await Usuario.findOne({ where });
+
+    if (!usuario) {
       return res.status(401).json({ error: 'Usuário inativo ou não encontrado.' });
     }
 

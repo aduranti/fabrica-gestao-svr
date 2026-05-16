@@ -16,6 +16,7 @@ const schema = Joi.object({
 exports.listar = async (req, res, next) => {
   try {
     const produtos = await Produto.findAll({
+      where: { empresa_id: req.empresa.id },
       include: [
         { model: UnidadeMedida, as: 'unidadeMedida' },
         { model: Formula, as: 'formula', attributes: ['id', 'nome', 'categoria'] },
@@ -31,14 +32,15 @@ exports.criar = async (req, res, next) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const produto = await Produto.create(value);
+    const produto = await Produto.create({ ...value, empresa_id: req.empresa.id });
     res.status(201).json(produto);
   } catch (err) { next(err); }
 };
 
 exports.buscar = async (req, res, next) => {
   try {
-    const produto = await Produto.findByPk(req.params.id, {
+    const produto = await Produto.findOne({
+      where: { id: req.params.id, empresa_id: req.empresa.id },
       include: [
         { model: UnidadeMedida, as: 'unidadeMedida' },
         { model: Formula, as: 'formula' },
@@ -54,7 +56,7 @@ exports.atualizar = async (req, res, next) => {
     const { error, value } = schema.fork(Object.keys(schema.describe().keys), f => f.optional()).validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const produto = await Produto.findByPk(req.params.id);
+    const produto = await Produto.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!produto) return res.status(404).json({ error: 'Produto não encontrado.' });
 
     await produto.update(value);
@@ -64,8 +66,11 @@ exports.atualizar = async (req, res, next) => {
 
 exports.listarLotes = async (req, res, next) => {
   try {
+    const produto = await Produto.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
+    if (!produto) return res.status(404).json({ error: 'Produto não encontrado.' });
+
     const lotes = await LoteProduto.findAll({
-      where: { produto_id: req.params.id },
+      where: { produto_id: req.params.id, empresa_id: req.empresa.id },
       order: [['data_fabricacao', 'DESC']],
     });
     res.json(lotes);
@@ -76,6 +81,7 @@ exports.alertasEstoque = async (req, res, next) => {
   try {
     const alertas = await Produto.findAll({
       where: {
+        empresa_id: req.empresa.id,
         ativo: true,
         estoque_atual: { [Op.lte]: sequelize.col('estoque_minimo') },
       },

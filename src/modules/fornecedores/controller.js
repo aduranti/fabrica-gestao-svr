@@ -1,4 +1,5 @@
 const Joi = require('joi');
+const { Op } = require('sequelize');
 const { Fornecedor, MateriaPrima } = require('../../models');
 
 const schema = Joi.object({
@@ -19,7 +20,7 @@ const schema = Joi.object({
 exports.listar = async (req, res, next) => {
   try {
     const { ativo } = req.query;
-    const where = {};
+    const where = { empresa_id: req.empresa.id };
     if (ativo !== undefined) where.ativo = ativo === 'true';
 
     const fornecedores = await Fornecedor.findAll({ where, order: [['razao_social', 'ASC']] });
@@ -32,14 +33,14 @@ exports.criar = async (req, res, next) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const fornecedor = await Fornecedor.create(value);
+    const fornecedor = await Fornecedor.create({ ...value, empresa_id: req.empresa.id });
     res.status(201).json(fornecedor);
   } catch (err) { next(err); }
 };
 
 exports.buscar = async (req, res, next) => {
   try {
-    const fornecedor = await Fornecedor.findByPk(req.params.id);
+    const fornecedor = await Fornecedor.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!fornecedor) return res.status(404).json({ error: 'Fornecedor não encontrado.' });
     res.json(fornecedor);
   } catch (err) { next(err); }
@@ -50,7 +51,7 @@ exports.atualizar = async (req, res, next) => {
     const { error, value } = schema.fork(Object.keys(schema.describe().keys), f => f.optional()).validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const fornecedor = await Fornecedor.findByPk(req.params.id);
+    const fornecedor = await Fornecedor.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!fornecedor) return res.status(404).json({ error: 'Fornecedor não encontrado.' });
 
     await fornecedor.update(value);
@@ -60,7 +61,7 @@ exports.atualizar = async (req, res, next) => {
 
 exports.toggleAtivo = async (req, res, next) => {
   try {
-    const fornecedor = await Fornecedor.findByPk(req.params.id);
+    const fornecedor = await Fornecedor.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!fornecedor) return res.status(404).json({ error: 'Fornecedor não encontrado.' });
 
     await fornecedor.update({ ativo: !fornecedor.ativo });
@@ -70,7 +71,8 @@ exports.toggleAtivo = async (req, res, next) => {
 
 exports.listarMateriasPrimas = async (req, res, next) => {
   try {
-    const fornecedor = await Fornecedor.findByPk(req.params.id, {
+    const fornecedor = await Fornecedor.findOne({
+      where: { id: req.params.id, empresa_id: req.empresa.id },
       include: [{ model: MateriaPrima, through: { attributes: ['preco_unitario', 'prazo_entrega_dias', 'preferencial'] } }],
     });
     if (!fornecedor) return res.status(404).json({ error: 'Fornecedor não encontrado.' });

@@ -28,7 +28,7 @@ const schemaPedido = Joi.object({
 exports.listar = async (req, res, next) => {
   try {
     const { status, fornecedor_id } = req.query;
-    const where = {};
+    const where = { empresa_id: req.empresa.id };
     if (status) where.status = status;
     if (fornecedor_id) where.fornecedor_id = fornecedor_id;
 
@@ -47,7 +47,7 @@ exports.criar = async (req, res, next) => {
     if (error) return res.status(400).json({ error: error.details[0].message });
 
     const pedido = await sequelize.transaction(async (t) => {
-      const numero = await gerarNumero(PedidoCompra, 'PC');
+      const numero = await gerarNumero(PedidoCompra, 'PC', req.empresa.id);
 
       let valorTotal = 0;
       const itensData = value.itens.map(item => {
@@ -57,6 +57,7 @@ exports.criar = async (req, res, next) => {
       });
 
       const novoPedido = await PedidoCompra.create({
+        empresa_id: req.empresa.id,
         numero,
         fornecedor_id: value.fornecedor_id,
         usuario_id: req.usuario.id,
@@ -83,7 +84,8 @@ exports.criar = async (req, res, next) => {
 
 exports.buscar = async (req, res, next) => {
   try {
-    const pedido = await PedidoCompra.findByPk(req.params.id, {
+    const pedido = await PedidoCompra.findOne({
+      where: { id: req.params.id, empresa_id: req.empresa.id },
       include: [
         { model: Fornecedor, as: 'fornecedor' },
         { model: PedidoCompraItem, as: 'itens', include: [{ model: MateriaPrima, as: 'materiaPrima' }] },
@@ -96,7 +98,7 @@ exports.buscar = async (req, res, next) => {
 
 exports.atualizar = async (req, res, next) => {
   try {
-    const pedido = await PedidoCompra.findByPk(req.params.id);
+    const pedido = await PedidoCompra.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!pedido) return res.status(404).json({ error: 'Pedido não encontrado.' });
 
     if (!['rascunho', 'enviado'].includes(pedido.status)) {
@@ -144,7 +146,7 @@ exports.atualizarInfo = async (req, res, next) => {
     const { error, value } = schemaInfo.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const pedido = await PedidoCompra.findByPk(req.params.id);
+    const pedido = await PedidoCompra.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!pedido) return res.status(404).json({ error: 'Pedido não encontrado.' });
     if (pedido.status === 'cancelado') {
       return res.status(400).json({ error: 'Pedido cancelado não pode ser alterado.' });
@@ -162,7 +164,8 @@ exports.corrigirItens = async (req, res, next) => {
     }).validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const pedido = await PedidoCompra.findByPk(req.params.id, {
+    const pedido = await PedidoCompra.findOne({
+      where: { id: req.params.id, empresa_id: req.empresa.id },
       include: [{ model: PedidoCompraItem, as: 'itens' }],
     });
     if (!pedido) return res.status(404).json({ error: 'Pedido não encontrado.' });
@@ -173,7 +176,6 @@ exports.corrigirItens = async (req, res, next) => {
     await sequelize.transaction(async (t) => {
       const temRecebimento = ['parcial', 'recebido'].includes(pedido.status);
 
-      // Estorna estoque de todos os itens já recebidos
       if (temRecebimento) {
         for (const item of pedido.itens) {
           const qtdRecebida = parseFloat(item.quantidade_recebida) || 0;
@@ -182,11 +184,10 @@ exports.corrigirItens = async (req, res, next) => {
           const fatorConversao = parseFloat(item.fator_conversao) || 1;
           const qtdEstornar = qtdRecebida * fatorConversao;
 
-          const materia = await MateriaPrima.findByPk(item.materia_prima_id, { transaction: t });
+          const materia = await MateriaPrima.findOne({ where: { id: item.materia_prima_id, empresa_id: req.empresa.id }, transaction: t });
           const saldoAnterior = parseFloat(materia.estoque_atual);
           const novoSaldo = saldoAnterior - qtdEstornar;
 
-          // Recalcula custo médio revertendo a entrada
           let novoCustoMedio = parseFloat(materia.custo_medio);
           if (novoSaldo > 0) {
             const custoOriginal = parseFloat(item.preco_unitario) / fatorConversao;
@@ -201,6 +202,7 @@ exports.corrigirItens = async (req, res, next) => {
           }, { transaction: t });
 
           await MovimentacaoEstoque.create({
+            empresa_id: req.empresa.id,
             materia_prima_id: materia.id,
             tipo: 'saida',
             quantidade: qtdEstornar,
@@ -216,28 +218,22 @@ exports.corrigirItens = async (req, res, next) => {
         }
       }
 
-      // Remove itens antigos e cria novos
       await PedidoCompraItem.destroy({ where: { pedido_id: pedido.id }, transaction: t });
 
       let valorTotal = 0;
       for (const item of value.itens) {
         const subtotal = item.quantidade_pedida * item.preco_unitario;
         valorTotal += subtotal;
-        await PedidoCompraItem.create({
-          pedido_id: pedido.id, ...item, subtotal,
-        }, { transaction: t });
+        await PedidoCompraItem.create({ pedido_id: pedido.id, ...item, subtotal }, { transaction: t });
       }
 
-      // Se havia recebimento, volta para 'enviado' aguardando novo recebimento
       await pedido.update({
         valor_total: valorTotal + parseFloat(pedido.valor_frete || 0),
         ...(temRecebimento ? { status: 'enviado', data_recebimento: null } : {}),
       }, { transaction: t });
     });
 
-    res.json(await PedidoCompra.findByPk(pedido.id, {
-      include: [{ model: PedidoCompraItem, as: 'itens' }],
-    }));
+    res.json(await PedidoCompra.findByPk(pedido.id, { include: [{ model: PedidoCompraItem, as: 'itens' }] }));
   } catch (err) { next(err); }
 };
 
@@ -249,7 +245,7 @@ exports.atualizarStatus = async (req, res, next) => {
       return res.status(400).json({ error: `Status deve ser um de: ${statusValidos.join(', ')}` });
     }
 
-    const pedido = await PedidoCompra.findByPk(req.params.id);
+    const pedido = await PedidoCompra.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!pedido) return res.status(404).json({ error: 'Pedido não encontrado.' });
 
     if (pedido.status === 'cancelado' || pedido.status === 'recebido') {
@@ -274,7 +270,8 @@ exports.receberPedido = async (req, res, next) => {
     const { error, value } = schemaRecebimento.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const pedido = await PedidoCompra.findByPk(req.params.id, {
+    const pedido = await PedidoCompra.findOne({
+      where: { id: req.params.id, empresa_id: req.empresa.id },
       include: [{ model: PedidoCompraItem, as: 'itens' }],
     });
     if (!pedido) return res.status(404).json({ error: 'Pedido não encontrado.' });
@@ -284,7 +281,6 @@ exports.receberPedido = async (req, res, next) => {
 
     await sequelize.transaction(async (t) => {
       const valorFrete = parseFloat(pedido.valor_frete) || 0;
-      // Total dos subtotais dos itens que estão sendo recebidos (para distribuir frete proporcionalmente)
       const totalSubtotalRecebidos = value.itens.reduce((acc, recebimento) => {
         const item = pedido.itens.find(i => i.id === recebimento.item_id);
         return acc + (item ? parseFloat(item.subtotal) : 0);
@@ -296,21 +292,16 @@ exports.receberPedido = async (req, res, next) => {
 
         const preco = recebimento.preco_unitario || item.preco_unitario;
         const fatorConversao = parseFloat(item.fator_conversao) || 1;
-
-        // Quantidade em unidade de estoque (ex: 2 frascos × 100ml = 200ml)
         const qtdEstoque = recebimento.quantidade_recebida * fatorConversao;
 
-        // Distribui o frete proporcionalmente ao subtotal do item
         const freteItem = totalSubtotalRecebidos > 0
           ? valorFrete * (parseFloat(item.subtotal) / totalSubtotalRecebidos)
           : 0;
-        // Custo por unidade de estoque = (preco_compra + frete_proporcional) / fator_conversao
         const precoComFrete = (parseFloat(preco) + (freteItem / recebimento.quantidade_recebida)) / fatorConversao;
 
         await item.update({ quantidade_recebida: recebimento.quantidade_recebida, preco_unitario: preco }, { transaction: t });
 
-        // Atualiza estoque com custo médio ponderado (incluindo frete, em unidade de estoque)
-        const materia = await MateriaPrima.findByPk(item.materia_prima_id, { transaction: t });
+        const materia = await MateriaPrima.findOne({ where: { id: item.materia_prima_id, empresa_id: req.empresa.id }, transaction: t });
         const novoCustoMedio = calcularCustoMedio(
           parseFloat(materia.estoque_atual),
           parseFloat(materia.custo_medio),
@@ -322,6 +313,7 @@ exports.receberPedido = async (req, res, next) => {
         await materia.update({ estoque_atual: novoSaldo, custo_medio: novoCustoMedio }, { transaction: t });
 
         await MovimentacaoEstoque.create({
+          empresa_id: req.empresa.id,
           materia_prima_id: materia.id,
           tipo: 'entrada',
           quantidade: qtdEstoque,
@@ -338,7 +330,6 @@ exports.receberPedido = async (req, res, next) => {
         }, { transaction: t });
       }
 
-      // Verifica se todos os itens foram recebidos
       const itensAtualizados = await PedidoCompraItem.findAll({ where: { pedido_id: pedido.id }, transaction: t });
       const todoRecebido = itensAtualizados.every(i => parseFloat(i.quantidade_recebida) >= parseFloat(i.quantidade_pedida));
 

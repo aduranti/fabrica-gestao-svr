@@ -14,8 +14,8 @@ exports.movimentacoesMateriasPrimas = async (req, res, next) => {
     const { error, value } = schema.validate(req.query);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const condicoes = ['1=1'];
-    const replacements = {};
+    const condicoes = ['me.empresa_id = :empresa_id'];
+    const replacements = { empresa_id: req.empresa.id };
 
     if (value.materia_prima_id) {
       condicoes.push('me.materia_prima_id = :materia_prima_id');
@@ -69,18 +69,17 @@ exports.movimentacoesMateriasPrimas = async (req, res, next) => {
         END AS formula_nome,
         u.nome AS usuario_nome
       FROM movimentacoes_estoque me
-      JOIN materias_primas mp ON mp.id = me.materia_prima_id
+      JOIN materias_primas mp ON mp.id = me.materia_prima_id AND mp.empresa_id = :empresa_id
       JOIN unidades_medida um ON um.id = mp.unidade_medida_id
-      LEFT JOIN pedidos_compra pc  ON me.origem_tipo = 'compra'   AND pc.id = me.origem_id
-      LEFT JOIN fornecedores fn    ON pc.fornecedor_id = fn.id
-      LEFT JOIN ordens_producao op ON me.origem_tipo = 'producao' AND op.id = me.origem_id
-      LEFT JOIN formulas fm        ON op.formula_id = fm.id
-      LEFT JOIN usuarios u         ON u.id = me.usuario_id
+      LEFT JOIN pedidos_compra pc  ON me.origem_tipo = 'compra'   AND pc.id = me.origem_id AND pc.empresa_id = :empresa_id
+      LEFT JOIN fornecedores fn    ON pc.fornecedor_id = fn.id    AND fn.empresa_id = :empresa_id
+      LEFT JOIN ordens_producao op ON me.origem_tipo = 'producao' AND op.id = me.origem_id AND op.empresa_id = :empresa_id
+      LEFT JOIN formulas fm        ON op.formula_id = fm.id       AND fm.empresa_id = :empresa_id
+      LEFT JOIN usuarios u         ON u.id = me.usuario_id        AND u.empresa_id = :empresa_id
       WHERE ${where}
       ORDER BY me.data_movimentacao DESC, me.id DESC
     `, { replacements, type: QueryTypes.SELECT });
 
-    // Totais por tipo
     const totais = movimentacoes.reduce((acc, m) => {
       acc[m.tipo] = (acc[m.tipo] || 0) + parseFloat(m.quantidade);
       return acc;
@@ -102,9 +101,8 @@ exports.produtosAcabados = async (req, res, next) => {
     const { error, value } = schema.validate(req.query);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    // Condições para lotes
-    const condicoesLote = ['1=1'];
-    const replacements = {};
+    const condicoesLote = ['l.empresa_id = :empresa_id'];
+    const replacements = { empresa_id: req.empresa.id };
 
     if (value.produto_id) {
       condicoesLote.push('l.produto_id = :produto_id');
@@ -125,7 +123,6 @@ exports.produtosAcabados = async (req, res, next) => {
 
     const whereLote = condicoesLote.join(' AND ');
 
-    // Resumo por produto
     const produtos = await sequelize.query(`
       SELECT
         p.id,
@@ -144,15 +141,15 @@ exports.produtosAcabados = async (req, res, next) => {
         COALESCE(SUM(CASE WHEN l.status = 'vencido'    THEN l.quantidade ELSE 0 END), 0) AS qtd_vencido
       FROM produtos p
       JOIN unidades_medida um ON um.id = p.unidade_medida_id
-      LEFT JOIN formulas f    ON f.id  = p.formula_id
-      LEFT JOIN lotes_produtos l ON l.produto_id = p.id
-      ${value.produto_id ? 'WHERE p.id = :produto_id' : ''}
+      LEFT JOIN formulas f    ON f.id  = p.formula_id AND f.empresa_id = :empresa_id
+      LEFT JOIN lotes_produtos l ON l.produto_id = p.id AND l.empresa_id = :empresa_id
+      WHERE p.empresa_id = :empresa_id
+        ${value.produto_id ? 'AND p.id = :produto_id' : ''}
       GROUP BY p.id, p.codigo, p.nome, p.estoque_atual, p.estoque_minimo,
                p.preco_custo, p.preco_venda, p.ativo, um.sigla, f.nome
       ORDER BY p.nome
     `, { replacements, type: QueryTypes.SELECT });
 
-    // Lotes com ordem de produção
     const lotes = await sequelize.query(`
       SELECT
         l.id,
@@ -169,14 +166,13 @@ exports.produtosAcabados = async (req, res, next) => {
         l.status,
         op.numero AS ordem_numero
       FROM lotes_produtos l
-      JOIN produtos p         ON p.id  = l.produto_id
+      JOIN produtos p         ON p.id  = l.produto_id  AND p.empresa_id = :empresa_id
       JOIN unidades_medida um ON um.id = p.unidade_medida_id
-      LEFT JOIN ordens_producao op ON op.id = l.ordem_producao_id
+      LEFT JOIN ordens_producao op ON op.id = l.ordem_producao_id AND op.empresa_id = :empresa_id
       WHERE ${whereLote}
       ORDER BY l.data_fabricacao DESC, l.id DESC
     `, { replacements, type: QueryTypes.SELECT });
 
-    // Totais
     const totais = {
       total_produtos: produtos.length,
       produtos_abaixo_minimo: produtos.filter(p => parseFloat(p.estoque_atual) <= parseFloat(p.estoque_minimo) && p.estoque_minimo > 0).length,
@@ -201,8 +197,8 @@ exports.vendas = async (req, res, next) => {
     const { error, value } = schema.validate(req.query);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const condicoes = ["v.status != 'cancelada'"];
-    const replacements = {};
+    const condicoes = ["v.empresa_id = :empresa_id", "v.status != 'cancelada'"];
+    const replacements = { empresa_id: req.empresa.id };
 
     if (value.status) { condicoes.push('v.status = :status'); replacements.status = value.status; }
     if (value.cliente) { condicoes.push('v.cliente LIKE :cliente'); replacements.cliente = `%${value.cliente}%`; }
@@ -231,13 +227,12 @@ exports.vendas = async (req, res, next) => {
         vi.subtotal
       FROM vendas v
       INNER JOIN venda_itens vi ON vi.venda_id = v.id
-      INNER JOIN produtos p ON p.id = vi.produto_id
-      LEFT JOIN usuarios u ON u.id = v.usuario_id
+      INNER JOIN produtos p ON p.id = vi.produto_id AND p.empresa_id = :empresa_id
+      LEFT JOIN usuarios u ON u.id = v.usuario_id AND u.empresa_id = :empresa_id
       WHERE ${where}
       ORDER BY v.data_venda DESC, v.id DESC, vi.id ASC
     `, { replacements, type: QueryTypes.SELECT });
 
-    // Totalizadores
     const totais = await sequelize.query(`
       SELECT
         COUNT(DISTINCT v.id) AS total_vendas,
@@ -251,7 +246,6 @@ exports.vendas = async (req, res, next) => {
       WHERE ${where}
     `, { replacements, type: QueryTypes.SELECT });
 
-    // Resumo por produto
     const porProduto = await sequelize.query(`
       SELECT
         p.id AS produto_id,
@@ -262,7 +256,7 @@ exports.vendas = async (req, res, next) => {
         COUNT(DISTINCT v.id) AS total_vendas
       FROM vendas v
       INNER JOIN venda_itens vi ON vi.venda_id = v.id
-      INNER JOIN produtos p ON p.id = vi.produto_id
+      INNER JOIN produtos p ON p.id = vi.produto_id AND p.empresa_id = :empresa_id
       LEFT JOIN usuarios u ON u.id = v.usuario_id
       WHERE ${where}
       GROUP BY p.id, p.codigo, p.nome
@@ -276,8 +270,11 @@ exports.vendas = async (req, res, next) => {
 exports.listaMateriasPrimas = async (req, res, next) => {
   try {
     const mps = await sequelize.query(
-      `SELECT id, CONCAT(COALESCE(codigo, ''), ' - ', nome) AS label FROM materias_primas ORDER BY nome`,
-      { type: QueryTypes.SELECT }
+      `SELECT id, CONCAT(COALESCE(codigo, ''), ' - ', nome) AS label
+       FROM materias_primas
+       WHERE empresa_id = :empresa_id
+       ORDER BY nome`,
+      { replacements: { empresa_id: req.empresa.id }, type: QueryTypes.SELECT }
     );
     res.json(mps);
   } catch (err) { next(err); }

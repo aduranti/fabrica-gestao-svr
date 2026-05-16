@@ -11,7 +11,10 @@ const schema = Joi.object({
 
 exports.listar = async (req, res, next) => {
   try {
-    const usuarios = await Usuario.findAll({ order: [['nome', 'ASC']] });
+    const usuarios = await Usuario.findAll({
+      where: { empresa_id: req.empresa.id },
+      order: [['nome', 'ASC']],
+    });
     res.json(usuarios);
   } catch (err) { next(err); }
 };
@@ -21,14 +24,14 @@ exports.criar = async (req, res, next) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const usuario = await Usuario.create(value);
+    const usuario = await Usuario.create({ ...value, empresa_id: req.empresa.id });
     res.status(201).json(usuario);
   } catch (err) { next(err); }
 };
 
 exports.buscar = async (req, res, next) => {
   try {
-    const usuario = await Usuario.findByPk(req.params.id);
+    const usuario = await Usuario.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!usuario) return res.status(404).json({ error: 'Usuário não encontrado.' });
     res.json(usuario);
   } catch (err) { next(err); }
@@ -40,7 +43,7 @@ exports.atualizar = async (req, res, next) => {
     const { error, value } = schemaUpdate.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const usuario = await Usuario.findByPk(req.params.id);
+    const usuario = await Usuario.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!usuario) return res.status(404).json({ error: 'Usuário não encontrado.' });
 
     await usuario.update(value);
@@ -50,7 +53,7 @@ exports.atualizar = async (req, res, next) => {
 
 exports.toggleAtivo = async (req, res, next) => {
   try {
-    const usuario = await Usuario.findByPk(req.params.id);
+    const usuario = await Usuario.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!usuario) return res.status(404).json({ error: 'Usuário não encontrado.' });
 
     await usuario.update({ ativo: !usuario.ativo });

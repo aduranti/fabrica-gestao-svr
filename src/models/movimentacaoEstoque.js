@@ -3,6 +3,7 @@ const { DataTypes } = require('sequelize');
 module.exports = (sequelize) => {
   return sequelize.define('MovimentacaoEstoque', {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
+    empresa_id: { type: DataTypes.INTEGER, allowNull: true },
     materia_prima_id: { type: DataTypes.INTEGER, allowNull: false },
     tipo: {
       type: DataTypes.ENUM('entrada', 'saida', 'ajuste', 'perda'),

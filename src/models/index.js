@@ -12,7 +12,9 @@ const sequelize = new Sequelize(
 );
 
 // Importar todos os modelos
+const Tenant = require('./tenant')(sequelize);
 const Usuario = require('./usuario')(sequelize);
+const LogAuditoria = require('./logAuditoria')(sequelize);
 const Fornecedor = require('./fornecedor')(sequelize);
 const UnidadeMedida = require('./unidadeMedida')(sequelize);
 const CategoriaMP = require('./categoriaMP')(sequelize);
@@ -32,28 +34,36 @@ const Venda = require('./venda')(sequelize);
 const VendaItem = require('./vendaItem')(sequelize);
 const Cliente = require('./cliente')(sequelize);
 
-// Associações
-// Usuario
+// ── Tenant ───────────────────────────────────────────────────────
+Tenant.hasMany(Usuario, { foreignKey: 'empresa_id' });
+Tenant.hasMany(LogAuditoria, { foreignKey: 'empresa_id' });
+
+// ── Usuario ───────────────────────────────────────────────────────
+Usuario.belongsTo(Tenant, { foreignKey: 'empresa_id', as: 'tenant' });
 Usuario.hasMany(PedidoCompra, { foreignKey: 'usuario_id' });
 Usuario.hasMany(OrdemProducao, { foreignKey: 'usuario_responsavel_id' });
 
-// Fornecedor
+// ── LogAuditoria ──────────────────────────────────────────────────
+LogAuditoria.belongsTo(Tenant, { foreignKey: 'empresa_id', as: 'tenant' });
+LogAuditoria.belongsTo(Usuario, { foreignKey: 'usuario_id', as: 'usuario' });
+
+// ── Fornecedor ────────────────────────────────────────────────────
 Fornecedor.hasMany(PedidoCompra, { foreignKey: 'fornecedor_id' });
 Fornecedor.belongsToMany(MateriaPrima, {
   through: MateriaPrimaFornecedor,
   foreignKey: 'fornecedor_id',
 });
 
-// UnidadeMedida
+// ── UnidadeMedida (global — sem empresa_id) ───────────────────────
 UnidadeMedida.hasMany(MateriaPrima, { foreignKey: 'unidade_medida_id' });
 UnidadeMedida.hasMany(Formula, { foreignKey: 'rendimento_unidade_id' });
 UnidadeMedida.hasMany(FormulaIngrediente, { foreignKey: 'unidade_medida_id' });
 
-// CategoriaMP
+// ── CategoriaMP ───────────────────────────────────────────────────
 CategoriaMP.hasMany(MateriaPrima, { foreignKey: 'categoria_id' });
 MateriaPrima.belongsTo(CategoriaMP, { foreignKey: 'categoria_id', as: 'categoria' });
 
-// MateriaPrima
+// ── MateriaPrima ──────────────────────────────────────────────────
 MateriaPrima.belongsTo(UnidadeMedida, { foreignKey: 'unidade_medida_id', as: 'unidadeMedida' });
 MateriaPrima.hasMany(MovimentacaoEstoque, { foreignKey: 'materia_prima_id' });
 MateriaPrima.hasMany(FormulaIngrediente, { foreignKey: 'materia_prima_id' });
@@ -63,56 +73,56 @@ MateriaPrima.belongsToMany(Fornecedor, {
   foreignKey: 'materia_prima_id',
 });
 
-// PedidoCompra
+// ── PedidoCompra ──────────────────────────────────────────────────
 PedidoCompra.belongsTo(Fornecedor, { foreignKey: 'fornecedor_id', as: 'fornecedor' });
 PedidoCompra.belongsTo(Usuario, { foreignKey: 'usuario_id', as: 'usuario' });
 PedidoCompra.hasMany(PedidoCompraItem, { foreignKey: 'pedido_id', as: 'itens' });
 
-// PedidoCompraItem
+// ── PedidoCompraItem ──────────────────────────────────────────────
 PedidoCompraItem.belongsTo(PedidoCompra, { foreignKey: 'pedido_id' });
 PedidoCompraItem.belongsTo(MateriaPrima, { foreignKey: 'materia_prima_id', as: 'materiaPrima' });
 
-// Formula
+// ── Formula ───────────────────────────────────────────────────────
 Formula.belongsTo(UnidadeMedida, { foreignKey: 'rendimento_unidade_id', as: 'rendimentoUnidade' });
 Formula.hasMany(FormulaIngrediente, { foreignKey: 'formula_id', as: 'ingredientes' });
 Formula.hasMany(FormulaVersao, { foreignKey: 'formula_id', as: 'versoes' });
 Formula.hasMany(OrdemProducao, { foreignKey: 'formula_id' });
 Formula.hasOne(Produto, { foreignKey: 'formula_id' });
 
-// FormulaIngrediente
+// ── FormulaIngrediente ────────────────────────────────────────────
 FormulaIngrediente.belongsTo(Formula, { foreignKey: 'formula_id' });
 FormulaIngrediente.belongsTo(MateriaPrima, { foreignKey: 'materia_prima_id', as: 'materiaPrima' });
 FormulaIngrediente.belongsTo(UnidadeMedida, { foreignKey: 'unidade_medida_id', as: 'unidadeMedida' });
 
-// OrdemProducao
+// ── OrdemProducao ─────────────────────────────────────────────────
 OrdemProducao.belongsTo(Formula, { foreignKey: 'formula_id', as: 'formula' });
 OrdemProducao.belongsTo(Produto, { foreignKey: 'produto_id', as: 'produto' });
 OrdemProducao.belongsTo(Usuario, { foreignKey: 'usuario_responsavel_id', as: 'responsavel' });
 OrdemProducao.hasMany(OrdemProducaoInsumo, { foreignKey: 'ordem_id', as: 'insumos' });
 OrdemProducao.hasMany(LoteProduto, { foreignKey: 'ordem_producao_id', as: 'lotes' });
 
-// OrdemProducaoInsumo
+// ── OrdemProducaoInsumo ───────────────────────────────────────────
 OrdemProducaoInsumo.belongsTo(OrdemProducao, { foreignKey: 'ordem_id' });
 OrdemProducaoInsumo.belongsTo(MateriaPrima, { foreignKey: 'materia_prima_id', as: 'materiaPrima' });
 
-// Produto
+// ── Produto ───────────────────────────────────────────────────────
 Produto.belongsTo(Formula, { foreignKey: 'formula_id', as: 'formula' });
 Produto.belongsTo(UnidadeMedida, { foreignKey: 'unidade_medida_id', as: 'unidadeMedida' });
 Produto.hasMany(LoteProduto, { foreignKey: 'produto_id', as: 'lotes' });
 
-// LoteProduto
+// ── LoteProduto ───────────────────────────────────────────────────
 LoteProduto.belongsTo(Produto, { foreignKey: 'produto_id', as: 'produto' });
 LoteProduto.belongsTo(OrdemProducao, { foreignKey: 'ordem_producao_id', as: 'ordemProducao' });
 
-// Cliente
+// ── Cliente ───────────────────────────────────────────────────────
 Cliente.hasMany(Venda, { foreignKey: 'cliente_id' });
 
-// Venda
+// ── Venda ─────────────────────────────────────────────────────────
 Venda.belongsTo(Usuario, { foreignKey: 'usuario_id', as: 'usuario' });
 Venda.belongsTo(Cliente, { foreignKey: 'cliente_id', as: 'clienteCadastrado' });
 Venda.hasMany(VendaItem, { foreignKey: 'venda_id', as: 'itens' });
 
-// VendaItem
+// ── VendaItem ─────────────────────────────────────────────────────
 VendaItem.belongsTo(Venda, { foreignKey: 'venda_id' });
 VendaItem.belongsTo(Produto, { foreignKey: 'produto_id', as: 'produto' });
 Produto.hasMany(VendaItem, { foreignKey: 'produto_id' });
@@ -120,7 +130,9 @@ Produto.hasMany(VendaItem, { foreignKey: 'produto_id' });
 module.exports = {
   sequelize,
   Sequelize,
+  Tenant,
   Usuario,
+  LogAuditoria,
   Fornecedor,
   UnidadeMedida,
   CategoriaMP,

@@ -3,7 +3,8 @@ const { DataTypes } = require('sequelize');
 module.exports = (sequelize) => {
   return sequelize.define('Venda', {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-    numero: { type: DataTypes.STRING(20), allowNull: false, unique: true },
+    empresa_id: { type: DataTypes.INTEGER, allowNull: true },
+    numero: { type: DataTypes.STRING(20), allowNull: false },
     cliente_id: { type: DataTypes.INTEGER, allowNull: true },
     cliente: { type: DataTypes.STRING(150), allowNull: true },
     data_venda: { type: DataTypes.DATEONLY, allowNull: false },

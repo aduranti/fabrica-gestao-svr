@@ -3,7 +3,8 @@ const { DataTypes } = require('sequelize');
 module.exports = (sequelize) => {
   return sequelize.define('OrdemProducao', {
     id: { type: DataTypes.INTEGER, primaryKey: true, autoIncrement: true },
-    numero: { type: DataTypes.STRING(20), unique: true },
+    empresa_id: { type: DataTypes.INTEGER, allowNull: true },
+    numero: { type: DataTypes.STRING(20) },
     formula_id: { type: DataTypes.INTEGER, allowNull: false },
     produto_id: { type: DataTypes.INTEGER, allowNull: true },
     usuario_responsavel_id: { type: DataTypes.INTEGER, allowNull: false },

@@ -13,14 +13,17 @@ const schema = Joi.object({
 
 exports.listar = async (req, res, next) => {
   try {
-    const clientes = await Cliente.findAll({ order: [['nome', 'ASC']] });
+    const clientes = await Cliente.findAll({
+      where: { empresa_id: req.empresa.id },
+      order: [['nome', 'ASC']],
+    });
     res.json(clientes);
   } catch (err) { next(err); }
 };
 
 exports.buscarPorId = async (req, res, next) => {
   try {
-    const cliente = await Cliente.findByPk(req.params.id);
+    const cliente = await Cliente.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!cliente) return res.status(404).json({ error: 'Cliente não encontrado.' });
     res.json(cliente);
   } catch (err) { next(err); }
@@ -30,14 +33,14 @@ exports.criar = async (req, res, next) => {
   try {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
-    const cliente = await Cliente.create(value);
+    const cliente = await Cliente.create({ ...value, empresa_id: req.empresa.id });
     res.status(201).json(cliente);
   } catch (err) { next(err); }
 };
 
 exports.atualizar = async (req, res, next) => {
   try {
-    const cliente = await Cliente.findByPk(req.params.id);
+    const cliente = await Cliente.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!cliente) return res.status(404).json({ error: 'Cliente não encontrado.' });
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
@@ -48,7 +51,7 @@ exports.atualizar = async (req, res, next) => {
 
 exports.excluir = async (req, res, next) => {
   try {
-    const cliente = await Cliente.findByPk(req.params.id);
+    const cliente = await Cliente.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!cliente) return res.status(404).json({ error: 'Cliente não encontrado.' });
     await cliente.update({ ativo: false });
     res.json({ message: 'Cliente inativado com sucesso.' });

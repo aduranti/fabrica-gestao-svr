@@ -29,7 +29,7 @@ const schemaFormula = Joi.object({
 exports.listar = async (req, res, next) => {
   try {
     const { categoria, status } = req.query;
-    const where = {};
+    const where = { empresa_id: req.empresa.id };
     if (categoria) where.categoria = categoria;
     if (status) where.status = status;
 
@@ -50,6 +50,7 @@ exports.criar = async (req, res, next) => {
     const formula = await sequelize.transaction(async (t) => {
       const novaFormula = await Formula.create({
         ...value,
+        empresa_id: req.empresa.id,
         usuario_criacao_id: req.usuario.id,
         versao: 1,
       }, { transaction: t });
@@ -58,7 +59,6 @@ exports.criar = async (req, res, next) => {
         await FormulaIngrediente.create({ formula_id: novaFormula.id, ...ing }, { transaction: t });
       }
 
-      // Salva versão inicial
       await FormulaVersao.create({
         formula_id: novaFormula.id,
         versao: 1,
@@ -71,13 +71,13 @@ exports.criar = async (req, res, next) => {
       return novaFormula;
     });
 
-    res.status(201).json(await buscarFormulaCompleta(formula.id));
+    res.status(201).json(await buscarFormulaCompleta(formula.id, req.empresa.id));
   } catch (err) { next(err); }
 };
 
 exports.buscar = async (req, res, next) => {
   try {
-    const formula = await buscarFormulaCompleta(req.params.id);
+    const formula = await buscarFormulaCompleta(req.params.id, req.empresa.id);
     if (!formula) return res.status(404).json({ error: 'Fórmula não encontrada.' });
     res.json(formula);
   } catch (err) { next(err); }
@@ -88,13 +88,11 @@ exports.atualizar = async (req, res, next) => {
     const { error, value } = schemaFormula.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const formula = await Formula.findByPk(req.params.id);
+    const formula = await Formula.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!formula) return res.status(404).json({ error: 'Fórmula não encontrada.' });
 
     await sequelize.transaction(async (t) => {
       const novaVersao = formula.versao + 1;
-
-      // Snapshot dos ingredientes atuais antes de alterar
       const ingredientesAtuais = await FormulaIngrediente.findAll({ where: { formula_id: formula.id } });
       await FormulaVersao.create({
         formula_id: formula.id,
@@ -105,7 +103,6 @@ exports.atualizar = async (req, res, next) => {
         motivo_alteracao: value.motivo_alteracao || 'Alteração de fórmula',
       }, { transaction: t });
 
-      // Remove e recria ingredientes
       await FormulaIngrediente.destroy({ where: { formula_id: formula.id }, transaction: t });
       for (const ing of value.ingredientes) {
         await FormulaIngrediente.create({ formula_id: formula.id, ...ing }, { transaction: t });
@@ -114,7 +111,7 @@ exports.atualizar = async (req, res, next) => {
       await formula.update({ ...value, versao: novaVersao }, { transaction: t });
     });
 
-    res.json(await buscarFormulaCompleta(formula.id));
+    res.json(await buscarFormulaCompleta(formula.id, req.empresa.id));
   } catch (err) { next(err); }
 };
 
@@ -124,10 +121,8 @@ exports.atualizarStatus = async (req, res, next) => {
     if (!['rascunho', 'ativa', 'inativa'].includes(status)) {
       return res.status(400).json({ error: 'Status inválido.' });
     }
-
-    const formula = await Formula.findByPk(req.params.id);
+    const formula = await Formula.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!formula) return res.status(404).json({ error: 'Fórmula não encontrada.' });
-
     await formula.update({ status });
     res.json({ status: formula.status });
   } catch (err) { next(err); }
@@ -135,6 +130,9 @@ exports.atualizarStatus = async (req, res, next) => {
 
 exports.listarVersoes = async (req, res, next) => {
   try {
+    const formula = await Formula.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
+    if (!formula) return res.status(404).json({ error: 'Fórmula não encontrada.' });
+
     const versoes = await FormulaVersao.findAll({
       where: { formula_id: req.params.id },
       order: [['versao', 'DESC']],
@@ -146,7 +144,7 @@ exports.listarVersoes = async (req, res, next) => {
 exports.calcularCusto = async (req, res, next) => {
   try {
     const quantidade = parseFloat(req.query.quantidade) || 1;
-    const formula = await buscarFormulaCompleta(req.params.id);
+    const formula = await buscarFormulaCompleta(req.params.id, req.empresa.id);
     if (!formula) return res.status(404).json({ error: 'Fórmula não encontrada.' });
 
     const fator = quantidade / parseFloat(formula.rendimento_quantidade);
@@ -154,7 +152,7 @@ exports.calcularCusto = async (req, res, next) => {
 
     const ingredientesComCusto = await Promise.all(
       formula.ingredientes.map(async (ing) => {
-        const mp = await MateriaPrima.findByPk(ing.materia_prima_id);
+        const mp = await MateriaPrima.findOne({ where: { id: ing.materia_prima_id, empresa_id: req.empresa.id } });
         const qtdAjustada = parseFloat(ing.quantidade) * fator;
         const custo = qtdAjustada * parseFloat(mp.custo_medio);
         custoTotal += custo;
@@ -177,8 +175,9 @@ exports.calcularCusto = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-async function buscarFormulaCompleta(id) {
-  return Formula.findByPk(id, {
+async function buscarFormulaCompleta(id, empresaId) {
+  return Formula.findOne({
+    where: { id, empresa_id: empresaId },
     include: [
       { model: UnidadeMedida, as: 'rendimentoUnidade' },
       {

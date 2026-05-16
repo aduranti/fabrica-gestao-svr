@@ -1,15 +1,17 @@
+const { Op } = require('sequelize');
+
 /**
- * Gera um número sequencial formatado para pedidos, ordens, etc.
- * Exemplo: PC-2024-0001, OP-2024-0001
+ * Gera número sequencial por empresa. Ex: PC-2026-0001 (isolado por tenant).
  */
-async function gerarNumero(modelo, prefixo, campoNumero = 'numero') {
+async function gerarNumero(modelo, prefixo, empresaId, campoNumero = 'numero') {
   const ano = new Date().getFullYear();
   const prefixoAno = `${prefixo}-${ano}-`;
 
+  const where = { [campoNumero]: { [Op.like]: `${prefixoAno}%` } };
+  if (empresaId != null) where.empresa_id = empresaId;
+
   const ultimo = await modelo.findOne({
-    where: {
-      [campoNumero]: { [require('sequelize').Op.like]: `${prefixoAno}%` },
-    },
+    where,
     order: [[campoNumero, 'DESC']],
   });
 
@@ -23,22 +25,19 @@ async function gerarNumero(modelo, prefixo, campoNumero = 'numero') {
 }
 
 /**
- * Gera número de lote no formato L{DD}{MM}{AA}{Turno}{SEQ}
- * Exemplo: L150424A0001
- * @param {Model} LoteProduto - modelo Sequelize
- * @param {string} turno - 'A', 'B' ou 'C'
- * @param {Date} data - data de fabricação (default: hoje)
+ * Gera número de lote por empresa. Ex: L150524A0001
  */
-async function gerarNumeroLote(LoteProduto, turno = 'A', data = new Date()) {
+async function gerarNumeroLote(LoteProduto, turno = 'A', empresaId, data = new Date()) {
   const dd = String(data.getDate()).padStart(2, '0');
   const mm = String(data.getMonth() + 1).padStart(2, '0');
   const aa = String(data.getFullYear()).slice(-2);
   const prefixo = `L${dd}${mm}${aa}${turno}`;
 
+  const where = { numero_lote: { [Op.like]: `${prefixo}%` } };
+  if (empresaId != null) where.empresa_id = empresaId;
+
   const ultimo = await LoteProduto.findOne({
-    where: {
-      numero_lote: { [require('sequelize').Op.like]: `${prefixo}%` },
-    },
+    where,
     order: [['numero_lote', 'DESC']],
   });
 

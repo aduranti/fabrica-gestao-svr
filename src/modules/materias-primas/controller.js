@@ -17,7 +17,16 @@ const schema = Joi.object({
 
 exports.listarCategorias = async (req, res, next) => {
   try {
-    const categorias = await CategoriaMP.findAll({ order: [['nome', 'ASC']] });
+    // Retorna categorias globais (empresa_id IS NULL) + categorias do tenant
+    const categorias = await CategoriaMP.findAll({
+      where: {
+        [Op.or]: [
+          { empresa_id: req.empresa.id },
+          { empresa_id: null },
+        ],
+      },
+      order: [['nome', 'ASC']],
+    });
     res.json(categorias);
   } catch (err) { next(err); }
 };
@@ -30,13 +39,14 @@ exports.criarCategoria = async (req, res, next) => {
     }).validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const categoria = await CategoriaMP.create(value);
+    const categoria = await CategoriaMP.create({ ...value, empresa_id: req.empresa.id });
     res.status(201).json(categoria);
   } catch (err) { next(err); }
 };
 
 exports.listarUnidades = async (req, res, next) => {
   try {
+    // Unidades são globais (sem empresa_id)
     const unidades = await UnidadeMedida.findAll({ order: [['nome', 'ASC']] });
     res.json(unidades);
   } catch (err) { next(err); }
@@ -58,7 +68,7 @@ exports.criarUnidade = async (req, res, next) => {
 exports.listar = async (req, res, next) => {
   try {
     const { ativo, categoria_id, search } = req.query;
-    const where = {};
+    const where = { empresa_id: req.empresa.id };
     if (ativo !== undefined) where.ativo = ativo === 'true';
     if (categoria_id) where.categoria_id = categoria_id;
     if (search) where.nome = { [Op.like]: `%${search}%` };
@@ -80,14 +90,15 @@ exports.criar = async (req, res, next) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const materia = await MateriaPrima.create(value);
+    const materia = await MateriaPrima.create({ ...value, empresa_id: req.empresa.id });
     res.status(201).json(materia);
   } catch (err) { next(err); }
 };
 
 exports.buscar = async (req, res, next) => {
   try {
-    const materia = await MateriaPrima.findByPk(req.params.id, {
+    const materia = await MateriaPrima.findOne({
+      where: { id: req.params.id, empresa_id: req.empresa.id },
       include: [
         { model: CategoriaMP, as: 'categoria' },
         { model: UnidadeMedida, as: 'unidadeMedida' },
@@ -103,7 +114,7 @@ exports.atualizar = async (req, res, next) => {
     const { error, value } = schema.fork(Object.keys(schema.describe().keys), f => f.optional()).validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const materia = await MateriaPrima.findByPk(req.params.id);
+    const materia = await MateriaPrima.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!materia) return res.status(404).json({ error: 'Matéria-prima não encontrada.' });
 
     await materia.update(value);
@@ -113,7 +124,7 @@ exports.atualizar = async (req, res, next) => {
 
 exports.toggleAtivo = async (req, res, next) => {
   try {
-    const materia = await MateriaPrima.findByPk(req.params.id);
+    const materia = await MateriaPrima.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!materia) return res.status(404).json({ error: 'Matéria-prima não encontrada.' });
     await materia.update({ ativo: !materia.ativo });
     res.json({ ativo: materia.ativo });
@@ -122,8 +133,12 @@ exports.toggleAtivo = async (req, res, next) => {
 
 exports.movimentacoes = async (req, res, next) => {
   try {
+    // Verifica ownership da MP antes de listar movimentações
+    const materia = await MateriaPrima.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
+    if (!materia) return res.status(404).json({ error: 'Matéria-prima não encontrada.' });
+
     const movs = await MovimentacaoEstoque.findAll({
-      where: { materia_prima_id: req.params.id },
+      where: { materia_prima_id: req.params.id, empresa_id: req.empresa.id },
       order: [['data_movimentacao', 'DESC']],
       limit: 100,
     });
@@ -139,7 +154,7 @@ exports.ajusteEstoque = async (req, res, next) => {
     }).validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const materia = await MateriaPrima.findByPk(req.params.id);
+    const materia = await MateriaPrima.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!materia) return res.status(404).json({ error: 'Matéria-prima não encontrada.' });
 
     const saldoAnterior = parseFloat(materia.estoque_atual);
@@ -152,6 +167,7 @@ exports.ajusteEstoque = async (req, res, next) => {
     await sequelize.transaction(async (t) => {
       await materia.update({ estoque_atual: novoSaldo }, { transaction: t });
       await MovimentacaoEstoque.create({
+        empresa_id: req.empresa.id,
         materia_prima_id: materia.id,
         tipo: 'ajuste',
         quantidade: Math.abs(value.quantidade),
@@ -172,6 +188,7 @@ exports.alertasEstoque = async (req, res, next) => {
   try {
     const alertas = await MateriaPrima.findAll({
       where: {
+        empresa_id: req.empresa.id,
         ativo: true,
         estoque_atual: { [Op.lte]: sequelize.col('estoque_minimo') },
       },

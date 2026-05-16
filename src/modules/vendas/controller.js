@@ -17,10 +17,10 @@ const schemaVenda = Joi.object({
   itens: Joi.array().items(schemaItem).min(1).required(),
 });
 
-// Listar todas as vendas
 exports.listar = async (req, res, next) => {
   try {
     const vendas = await Venda.findAll({
+      where: { empresa_id: req.empresa.id },
       include: [
         { model: Usuario, as: 'usuario', attributes: ['id', 'nome'] },
         { model: Cliente, as: 'clienteCadastrado', attributes: ['id', 'nome', 'cpf_cnpj', 'telefone'] },
@@ -32,16 +32,14 @@ exports.listar = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// Buscar por ID
 exports.buscarPorId = async (req, res, next) => {
   try {
-    const venda = await buscarCompleta(req.params.id);
+    const venda = await buscarCompleta(req.params.id, req.empresa.id);
     if (!venda) return res.status(404).json({ error: 'Venda não encontrada.' });
     res.json(venda);
   } catch (err) { next(err); }
 };
 
-// Criar venda (status rascunho)
 exports.criar = async (req, res, next) => {
   try {
     const { error, value } = schemaVenda.validate(req.body);
@@ -50,16 +48,16 @@ exports.criar = async (req, res, next) => {
     const total = calcularTotal(value.itens, value.desconto);
 
     await sequelize.transaction(async (t) => {
-      const numero = await gerarNumero(Venda, 'VD', 'numero');
+      const numero = await gerarNumero(Venda, 'VD', req.empresa.id, 'numero');
 
-      // Se vier cliente_id, busca o nome para preencher o campo cliente
       let nomeCliente = value.cliente || null;
       if (value.cliente_id) {
-        const c = await Cliente.findByPk(value.cliente_id, { transaction: t });
+        const c = await Cliente.findOne({ where: { id: value.cliente_id, empresa_id: req.empresa.id }, transaction: t });
         if (c) nomeCliente = c.nome;
       }
 
       const venda = await Venda.create({
+        empresa_id: req.empresa.id,
         numero,
         cliente_id: value.cliente_id || null,
         cliente: nomeCliente,
@@ -86,10 +84,12 @@ exports.criar = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// Atualizar venda (somente rascunho)
 exports.atualizar = async (req, res, next) => {
   try {
-    const venda = await Venda.findByPk(req.params.id, { include: [{ model: VendaItem, as: 'itens' }] });
+    const venda = await Venda.findOne({
+      where: { id: req.params.id, empresa_id: req.empresa.id },
+      include: [{ model: VendaItem, as: 'itens' }],
+    });
     if (!venda) return res.status(404).json({ error: 'Venda não encontrada.' });
     if (venda.status !== 'rascunho') return res.status(400).json({ error: 'Apenas vendas em rascunho podem ser editadas.' });
 
@@ -101,7 +101,7 @@ exports.atualizar = async (req, res, next) => {
     await sequelize.transaction(async (t) => {
       let nomeCliente = value.cliente || null;
       if (value.cliente_id) {
-        const c = await Cliente.findByPk(value.cliente_id, { transaction: t });
+        const c = await Cliente.findOne({ where: { id: value.cliente_id, empresa_id: req.empresa.id }, transaction: t });
         if (c) nomeCliente = c.nome;
       }
 
@@ -131,10 +131,10 @@ exports.atualizar = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// Confirmar venda — dá baixa no estoque
 exports.confirmar = async (req, res, next) => {
   try {
-    const venda = await Venda.findByPk(req.params.id, {
+    const venda = await Venda.findOne({
+      where: { id: req.params.id, empresa_id: req.empresa.id },
       include: [{ model: VendaItem, as: 'itens' }],
     });
     if (!venda) return res.status(404).json({ error: 'Venda não encontrada.' });
@@ -142,7 +142,7 @@ exports.confirmar = async (req, res, next) => {
 
     await sequelize.transaction(async (t) => {
       for (const item of venda.itens) {
-        const produto = await Produto.findByPk(item.produto_id, { transaction: t });
+        const produto = await Produto.findOne({ where: { id: item.produto_id, empresa_id: req.empresa.id }, transaction: t });
         if (!produto) throw new Error(`Produto ${item.produto_id} não encontrado.`);
 
         const qtd = parseFloat(item.quantidade);
@@ -167,20 +167,19 @@ exports.confirmar = async (req, res, next) => {
   }
 };
 
-// Cancelar venda — devolve estoque se estava confirmada
 exports.cancelar = async (req, res, next) => {
   try {
-    const venda = await Venda.findByPk(req.params.id, {
+    const venda = await Venda.findOne({
+      where: { id: req.params.id, empresa_id: req.empresa.id },
       include: [{ model: VendaItem, as: 'itens' }],
     });
     if (!venda) return res.status(404).json({ error: 'Venda não encontrada.' });
     if (venda.status === 'cancelada') return res.status(400).json({ error: 'Venda já está cancelada.' });
 
     await sequelize.transaction(async (t) => {
-      // Se já confirmada, devolve o estoque
       if (venda.status === 'confirmada') {
         for (const item of venda.itens) {
-          const produto = await Produto.findByPk(item.produto_id, { transaction: t });
+          const produto = await Produto.findOne({ where: { id: item.produto_id, empresa_id: req.empresa.id }, transaction: t });
           if (produto) {
             await produto.update({
               estoque_atual: parseFloat(produto.estoque_atual) + parseFloat(item.quantidade),
@@ -188,7 +187,6 @@ exports.cancelar = async (req, res, next) => {
           }
         }
       }
-
       await venda.update({ status: 'cancelada' }, { transaction: t });
     });
 
@@ -196,10 +194,9 @@ exports.cancelar = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// Excluir venda (somente rascunho)
 exports.excluir = async (req, res, next) => {
   try {
-    const venda = await Venda.findByPk(req.params.id);
+    const venda = await Venda.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!venda) return res.status(404).json({ error: 'Venda não encontrada.' });
     if (venda.status !== 'rascunho') return res.status(400).json({ error: 'Apenas rascunhos podem ser excluídos.' });
     await venda.destroy();
@@ -207,14 +204,14 @@ exports.excluir = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-// Helpers
 function calcularTotal(itens, desconto = 0) {
   const subtotal = itens.reduce((acc, i) => acc + i.quantidade * i.preco_unitario, 0);
   return Math.max(0, subtotal - parseFloat(desconto || 0));
 }
 
-async function buscarCompleta(id) {
-  return Venda.findByPk(id, {
+async function buscarCompleta(id, empresaId) {
+  return Venda.findOne({
+    where: { id, empresa_id: empresaId },
     include: [
       { model: Usuario, as: 'usuario', attributes: ['id', 'nome'] },
       { model: Cliente, as: 'clienteCadastrado', attributes: ['id', 'nome', 'cpf_cnpj', 'telefone', 'email', 'endereco'] },

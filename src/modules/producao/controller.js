@@ -17,7 +17,7 @@ const schemaOrdem = Joi.object({
 exports.listar = async (req, res, next) => {
   try {
     const { status } = req.query;
-    const where = {};
+    const where = { empresa_id: req.empresa.id };
     if (status) where.status = status;
 
     const ordens = await OrdemProducao.findAll({
@@ -34,19 +34,18 @@ exports.criar = async (req, res, next) => {
     const { error, value } = schemaOrdem.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const formula = await Formula.findByPk(value.formula_id, {
+    const formula = await Formula.findOne({
+      where: { id: value.formula_id, empresa_id: req.empresa.id },
       include: [{ model: FormulaIngrediente, as: 'ingredientes' }],
     });
     if (!formula) return res.status(404).json({ error: 'Fórmula não encontrada.' });
     if (formula.status !== 'ativa') return res.status(400).json({ error: 'Somente fórmulas ativas podem ser produzidas.' });
 
-    // Calcula fator de escala
     const fator = value.quantidade_planejada / parseFloat(formula.rendimento_quantidade);
 
-    // Verifica estoque disponível
     const deficiencias = [];
     for (const ing of formula.ingredientes) {
-      const mp = await MateriaPrima.findByPk(ing.materia_prima_id);
+      const mp = await MateriaPrima.findOne({ where: { id: ing.materia_prima_id, empresa_id: req.empresa.id } });
       const qtdNecessaria = parseFloat(ing.quantidade) * fator;
       if (parseFloat(mp.estoque_atual) < qtdNecessaria) {
         deficiencias.push({
@@ -59,16 +58,14 @@ exports.criar = async (req, res, next) => {
     }
 
     if (deficiencias.length > 0) {
-      return res.status(400).json({
-        error: 'Estoque insuficiente para produção.',
-        deficiencias,
-      });
+      return res.status(400).json({ error: 'Estoque insuficiente para produção.', deficiencias });
     }
 
     const ordem = await sequelize.transaction(async (t) => {
-      const numero = await gerarNumero(OrdemProducao, 'OP');
+      const numero = await gerarNumero(OrdemProducao, 'OP', req.empresa.id);
 
       const novaOrdem = await OrdemProducao.create({
+        empresa_id: req.empresa.id,
         numero,
         formula_id: value.formula_id,
         produto_id: value.produto_id,
@@ -81,7 +78,7 @@ exports.criar = async (req, res, next) => {
 
       for (const ing of formula.ingredientes) {
         const qtdPlanejada = parseFloat(ing.quantidade) * fator;
-        const mp = await MateriaPrima.findByPk(ing.materia_prima_id);
+        const mp = await MateriaPrima.findOne({ where: { id: ing.materia_prima_id, empresa_id: req.empresa.id } });
         await OrdemProducaoInsumo.create({
           ordem_id: novaOrdem.id,
           materia_prima_id: ing.materia_prima_id,
@@ -93,13 +90,13 @@ exports.criar = async (req, res, next) => {
       return novaOrdem;
     });
 
-    res.status(201).json(await buscarOrdemCompleta(ordem.id));
+    res.status(201).json(await buscarOrdemCompleta(ordem.id, req.empresa.id));
   } catch (err) { next(err); }
 };
 
 exports.buscar = async (req, res, next) => {
   try {
-    const ordem = await buscarOrdemCompleta(req.params.id);
+    const ordem = await buscarOrdemCompleta(req.params.id, req.empresa.id);
     if (!ordem) return res.status(404).json({ error: 'Ordem não encontrada.' });
     res.json(ordem);
   } catch (err) { next(err); }
@@ -107,7 +104,7 @@ exports.buscar = async (req, res, next) => {
 
 exports.iniciar = async (req, res, next) => {
   try {
-    const ordem = await OrdemProducao.findByPk(req.params.id);
+    const ordem = await OrdemProducao.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!ordem) return res.status(404).json({ error: 'Ordem não encontrada.' });
     if (ordem.status !== 'planejada') return res.status(400).json({ error: 'Apenas ordens planejadas podem ser iniciadas.' });
 
@@ -130,7 +127,8 @@ exports.concluir = async (req, res, next) => {
     const { error, value } = schemaConclusao.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const ordem = await OrdemProducao.findByPk(req.params.id, {
+    const ordem = await OrdemProducao.findOne({
+      where: { id: req.params.id, empresa_id: req.empresa.id },
       include: [{ model: OrdemProducaoInsumo, as: 'insumos' }],
     });
     if (!ordem) return res.status(404).json({ error: 'Ordem não encontrada.' });
@@ -139,18 +137,18 @@ exports.concluir = async (req, res, next) => {
     await sequelize.transaction(async (t) => {
       let custoTotal = 0;
 
-      // Dá baixa no estoque de matérias-primas
       for (const insumo of ordem.insumos) {
         const qtdReal = value.insumos_reais
           ? (value.insumos_reais.find(i => i.insumo_id === insumo.id)?.quantidade_real_usada || parseFloat(insumo.quantidade_planejada))
           : parseFloat(insumo.quantidade_planejada);
 
-        const mp = await MateriaPrima.findByPk(insumo.materia_prima_id, { transaction: t });
+        const mp = await MateriaPrima.findOne({ where: { id: insumo.materia_prima_id, empresa_id: req.empresa.id }, transaction: t });
         const novoSaldo = parseFloat(mp.estoque_atual) - qtdReal;
 
         await mp.update({ estoque_atual: novoSaldo }, { transaction: t });
 
         await MovimentacaoEstoque.create({
+          empresa_id: req.empresa.id,
           materia_prima_id: mp.id,
           tipo: 'saida',
           quantidade: qtdReal,
@@ -170,18 +168,17 @@ exports.concluir = async (req, res, next) => {
 
       const custoUnitario = value.quantidade_produzida > 0 ? custoTotal / value.quantidade_produzida : 0;
 
-      // Atualiza estoque do produto acabado
-      const produto = await Produto.findByPk(ordem.produto_id);
+      const produto = await Produto.findOne({ where: { id: ordem.produto_id, empresa_id: req.empresa.id } });
       if (produto) {
         await produto.update({
           estoque_atual: parseFloat(produto.estoque_atual) + value.quantidade_produzida,
           preco_custo: custoUnitario,
         }, { transaction: t });
 
-        // Cria lote com número automático
         const dataFabricacao = new Date();
-        const numeroLote = await gerarNumeroLote(LoteProduto, value.turno || 'A', dataFabricacao);
+        const numeroLote = await gerarNumeroLote(LoteProduto, value.turno || 'A', req.empresa.id, dataFabricacao);
         await LoteProduto.create({
+          empresa_id: req.empresa.id,
           produto_id: produto.id,
           ordem_producao_id: ordem.id,
           numero_lote: numeroLote,
@@ -208,11 +205,14 @@ exports.vincularProduto = async (req, res, next) => {
     const { produto_id } = req.body;
     if (!produto_id) return res.status(400).json({ error: 'produto_id é obrigatório.' });
 
-    const ordem = await OrdemProducao.findByPk(req.params.id);
+    const ordem = await OrdemProducao.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!ordem) return res.status(404).json({ error: 'Ordem não encontrada.' });
     if (ordem.status === 'cancelada') {
       return res.status(400).json({ error: 'Ordem cancelada não pode ser alterada.' });
     }
+
+    const produto = await Produto.findOne({ where: { id: produto_id, empresa_id: req.empresa.id } });
+    if (!produto) return res.status(404).json({ error: 'Produto não encontrado.' });
 
     await ordem.update({ produto_id });
     res.json({ message: 'Produto vinculado com sucesso.', produto_id });
@@ -224,7 +224,7 @@ exports.corrigirProdutoConcluida = async (req, res, next) => {
     const { produto_id, turno } = req.body;
     if (!produto_id) return res.status(400).json({ error: 'produto_id é obrigatório.' });
 
-    const ordem = await OrdemProducao.findByPk(req.params.id);
+    const ordem = await OrdemProducao.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!ordem) return res.status(404).json({ error: 'Ordem não encontrada.' });
     if (ordem.status !== 'concluida') {
       return res.status(400).json({ error: 'Este endpoint é apenas para ordens já concluídas.' });
@@ -233,7 +233,7 @@ exports.corrigirProdutoConcluida = async (req, res, next) => {
       return res.status(400).json({ error: 'Esta ordem já possui produto vinculado.' });
     }
 
-    const produto = await Produto.findByPk(produto_id);
+    const produto = await Produto.findOne({ where: { id: produto_id, empresa_id: req.empresa.id } });
     if (!produto) return res.status(404).json({ error: 'Produto não encontrado.' });
 
     await sequelize.transaction(async (t) => {
@@ -241,16 +241,15 @@ exports.corrigirProdutoConcluida = async (req, res, next) => {
         ? parseFloat(ordem.custo_total_calculado) / parseFloat(ordem.quantidade_produzida)
         : 0;
 
-      // Atualiza estoque do produto
       await produto.update({
         estoque_atual: parseFloat(produto.estoque_atual) + parseFloat(ordem.quantidade_produzida),
         preco_custo: custoUnitario,
       }, { transaction: t });
 
-      // Cria lote retroativo
       const dataFabricacao = ordem.data_conclusao ? new Date(ordem.data_conclusao) : new Date();
-      const numeroLote = await gerarNumeroLote(LoteProduto, turno || 'A', dataFabricacao);
+      const numeroLote = await gerarNumeroLote(LoteProduto, turno || 'A', req.empresa.id, dataFabricacao);
       await LoteProduto.create({
+        empresa_id: req.empresa.id,
         produto_id,
         ordem_producao_id: ordem.id,
         numero_lote: numeroLote,
@@ -259,7 +258,6 @@ exports.corrigirProdutoConcluida = async (req, res, next) => {
         custo_unitario: custoUnitario,
       }, { transaction: t });
 
-      // Vincula produto à ordem
       await ordem.update({ produto_id }, { transaction: t });
     });
 
@@ -269,7 +267,7 @@ exports.corrigirProdutoConcluida = async (req, res, next) => {
 
 exports.cancelar = async (req, res, next) => {
   try {
-    const ordem = await OrdemProducao.findByPk(req.params.id);
+    const ordem = await OrdemProducao.findOne({ where: { id: req.params.id, empresa_id: req.empresa.id } });
     if (!ordem) return res.status(404).json({ error: 'Ordem não encontrada.' });
     if (['concluida', 'cancelada'].includes(ordem.status)) {
       return res.status(400).json({ error: 'Ordem já finalizada não pode ser cancelada.' });
@@ -280,8 +278,9 @@ exports.cancelar = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-async function buscarOrdemCompleta(id) {
-  return OrdemProducao.findByPk(id, {
+async function buscarOrdemCompleta(id, empresaId) {
+  return OrdemProducao.findOne({
+    where: { id, empresa_id: empresaId },
     include: [
       { model: Formula, as: 'formula' },
       { model: Produto, as: 'produto', attributes: ['id', 'codigo', 'nome'] },

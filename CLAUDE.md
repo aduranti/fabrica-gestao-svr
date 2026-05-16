@@ -79,6 +79,56 @@ npm test                       # Jest (--runInBand --forceExit)
 
 ---
 
+## Arquitetura SaaS (multi-tenant, banco único)
+
+### Conceito
+Cada cliente é um **Tenant** (`tenants`). Toda query de negócio é filtrada por `empresa_id`. O JWT carrega `empresa_id`. Dois middlewares de guarda:
+- `auth.js` — valida JWT e carrega `req.usuario`
+- `requireTenant.js` — carrega `req.empresa` a partir de `req.usuario.empresa_id`, verifica trial
+
+### Hierarquia de perfis
+| Perfil | empresa_id | Acesso |
+|---|---|---|
+| `super_admin` | NULL | Todas as rotas `/platform/*`, dados de qualquer tenant |
+| `admin` | X | Rotas `/admin/*` + operacionais do próprio tenant |
+| `operador` | X | Rotas operacionais completas |
+| `comprador` | X | Restrito a compras e matérias-primas |
+
+### Stack de middlewares por grupo de rotas
+```
+/api/v1/auth           → público
+/api/v1/register       → público
+/api/v1/platform/*     → [auth, permissions('super_admin')]
+/api/v1/admin/*        → [auth, requireTenant, permissions('admin')]
+/api/v1/*              → [auth, requireTenant]  ← operacional
+```
+
+### Tabelas novas
+- `tenants`: PF (CPF+nome) ou PJ (CNPJ+razão social), slug único, plano, trial_expira
+- `logs_auditoria`: BIGINT id, empresa_id nullable, acao ENUM, dados JSON, ip/user_agent
+- `usuarios.empresa_id`: nullable (NULL = super_admin)
+
+### Tabelas com empresa_id adicionado (migration 017-018)
+Principais: fornecedores, categorias_mp, materias_primas, pedidos_compra, formulas, ordens_producao, produtos, clientes, vendas  
+Detalhe: movimentacoes_estoque, lotes_produtos
+
+### Tabelas globais (sem empresa_id)
+- `unidades_medida`: compartilhada entre todos os tenants
+
+### Regra categorias_mp
+`WHERE empresa_id = :id OR empresa_id IS NULL` — retorna categorias do tenant + globais do sistema
+
+### utils/numerador.js
+`gerarNumero(modelo, prefixo, empresaId)` e `gerarNumeroLote(LoteProduto, turno, empresaId, data)` — agora recebem `empresaId` obrigatório para isolar sequências por tenant
+
+### utils/log.js
+`registrarLog(req, { acao, entidade, entidade_id, dados_anteriores, dados_novos })` — helper que grava em `logs_auditoria` sem quebrar a operação principal (try/catch interno)
+
+### Registro público
+`POST /api/v1/register` — cria tenant (PF ou PJ) + usuário admin + categorias padrão seed + retorna JWT
+
+---
+
 ## Histórico de sessões
 
 ### Sessão 2026-05-13 (`d3454a8 Novas funcionalidades`)
